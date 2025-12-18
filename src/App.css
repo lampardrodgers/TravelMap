@@ -516,27 +516,46 @@
 }
 
 .tm-plan__stats {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+}
+
+.tm-plan__statswrap {
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 8px;
 }
 
 .tm-stat {
-  display: grid;
-  grid-template-columns: 18px 1fr;
-  grid-template-rows: auto auto;
-  column-gap: 8px;
-  row-gap: 2px;
+  flex: 1 1 0;
+  display: inline-flex;
   align-items: center;
-  padding: 8px 10px;
+  gap: 8px;
+  padding: 6px 8px;
   border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  background: rgba(255, 255, 255, 0.03);
+}
+
+.tm-stat:not(:last-child) {
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .tm-stat__icon {
-  grid-row: 1 / span 2;
   color: rgba(229, 231, 235, 0.88);
+}
+
+.tm-stat__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.tm-stat__row {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
 }
 
 .tm-stat__label {
@@ -545,35 +564,36 @@
 }
 
 .tm-stat__value {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 900;
   color: rgba(229, 231, 235, 0.95);
   letter-spacing: 0.2px;
+  white-space: nowrap;
 }
 
 .tm-stat--time {
-  border-color: rgba(167, 139, 250, 0.35);
-  background: rgba(139, 92, 246, 0.08);
+  color: rgba(229, 231, 235, 0.95);
 }
 
 .tm-stat--cost {
-  border-color: rgba(52, 211, 153, 0.30);
-  background: rgba(16, 185, 129, 0.08);
+  color: rgba(229, 231, 235, 0.95);
 }
 
 .tm-stat--walk {
-  border-color: rgba(148, 163, 184, 0.30);
-  background: rgba(148, 163, 184, 0.06);
+  color: rgba(229, 231, 235, 0.95);
 }
 
-.tm-stat--badge {
-  grid-column: 1 / -1;
-  display: grid;
-  place-items: center;
-  font-size: 12px;
+.tm-plan__note {
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
   font-weight: 900;
   color: #fecaca;
-  border-color: rgba(220, 38, 38, 0.45);
+  border: 1px solid rgba(220, 38, 38, 0.45);
   background: rgba(220, 38, 38, 0.10);
 }
 
@@ -655,7 +675,12 @@
 
 @media (max-width: 900px) {
   .tm-plan__stats {
-    grid-template-columns: 1fr;
+    flex-direction: column;
+  }
+
+  .tm-stat:not(:last-child) {
+    border-right: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   }
 
   .tm-seg__text {

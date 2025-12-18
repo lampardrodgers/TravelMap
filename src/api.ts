@@ -24,7 +24,7 @@ export type TransitPlanSummary = {
   walkingDistanceMeters: number | null
   summary: string
   hasTaxi: boolean
-  legs?: Array<{ kind: 'walking' | 'taxi' | 'bus' | 'subway' | 'railway'; label: string }>
+  legs?: Array<{ kind: 'walking' | 'taxi' | 'bus' | 'subway' | 'railway'; label: string; distanceMeters?: number }>
 }
 
 export type TransitSummary = {

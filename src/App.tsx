@@ -8,7 +8,7 @@ function toErrorMessage(err: unknown) {
   return err instanceof Error ? err.message : String(err)
 }
 
-type TransitLeg = { kind: 'walking' | 'taxi' | 'bus' | 'subway' | 'railway'; label: string }
+type TransitLeg = { kind: 'walking' | 'taxi' | 'bus' | 'subway' | 'railway'; label: string; distanceMeters?: number }
 
 function App() {
   const [city, setCity] = useState('')
@@ -43,11 +43,21 @@ function App() {
     for (const part of rawParts) {
       const p = part.replace(/\u00a0/g, ' ')
       if (p.startsWith('步行')) {
-        legs.push({ kind: 'walking', label: '步行' })
+        const m = p.match(/步行\s*([\d.]+)\s*(km|m|公里|米)?/i)
+        const num = m ? Number(m[1]) : NaN
+        const unit = (m?.[2] || 'm').toLowerCase()
+        const distanceMeters =
+          Number.isFinite(num) ? Math.round(unit === 'km' || unit === '公里' ? num * 1000 : num) : undefined
+        legs.push({ kind: 'walking', label: '步行', distanceMeters })
         continue
       }
       if (p.includes('打车')) {
-        legs.push({ kind: 'taxi', label: '打车' })
+        const m = p.match(/打车\s*([\d.]+)\s*(km|m|公里|米)?/i)
+        const num = m ? Number(m[1]) : NaN
+        const unit = (m?.[2] || 'm').toLowerCase()
+        const distanceMeters =
+          Number.isFinite(num) ? Math.round(unit === 'km' || unit === '公里' ? num * 1000 : num) : undefined
+        legs.push({ kind: 'taxi', label: '打车', distanceMeters })
         continue
       }
       const short = p.split('(')[0]?.trim() || p
@@ -79,6 +89,12 @@ function App() {
     return `${(meters / 1000).toFixed(1)} km`
   }
 
+  const formatDistanceCompact = (meters: number) => {
+    if (!Number.isFinite(meters)) return '-'
+    if (meters < 1000) return `${Math.round(meters)}m`
+    return `${(meters / 1000).toFixed(1)}km`
+  }
+
   const formatDuration = (seconds: number) => {
     if (!Number.isFinite(seconds)) return '-'
     const mins = Math.round(seconds / 60)
@@ -86,6 +102,15 @@ function App() {
     const h = Math.floor(mins / 60)
     const m = mins % 60
     return `${h} 小时 ${m} 分`
+  }
+
+  const formatDurationCompact = (seconds: number) => {
+    if (!Number.isFinite(seconds)) return '-'
+    const mins = Math.round(seconds / 60)
+    if (mins < 60) return `${mins}分`
+    const h = Math.floor(mins / 60)
+    const m = mins % 60
+    return `${h}小时${m}分`
   }
 
   const formatYuan = (value: number | null | undefined) => {
@@ -356,8 +381,22 @@ function App() {
                               <div className="tm-planlist">
                                 {c.transit.plans.map((plan, i) => {
                                   const key = `transit-${selectedHotelIdx}-${placeIdx}-${i}`
-                                  const legs =
+                                  const rawLegs =
                                     plan.legs?.length ? (plan.legs as TransitLeg[]) : plan.summary ? legsFromSummary(plan.summary) : []
+                                  const legs = (() => {
+                                    if (!plan.summary) return rawLegs
+                                    const parsed = legsFromSummary(plan.summary)
+                                    if (!parsed.length) return rawLegs
+                                    return rawLegs.map((l, idx) => {
+                                      if (l.kind === 'walking' && typeof l.distanceMeters !== 'number') {
+                                        const p = parsed[idx]
+                                        if (p?.kind === 'walking' && typeof p.distanceMeters === 'number') {
+                                          return { ...l, distanceMeters: p.distanceMeters }
+                                        }
+                                      }
+                                      return l
+                                    })
+                                  })()
                                   return (
                                     <div key={key} className="tm-plan">
                                       <div className="tm-plan__head">
@@ -371,31 +410,39 @@ function App() {
                                         </button>
                                       </div>
 
-                                      <div className="tm-plan__stats" aria-label="整体行程信息">
-                                        <div className="tm-stat tm-stat--time">
-                                          <span className="tm-stat__icon">
-                                            <ClockIcon />
-                                          </span>
-                                          <div className="tm-stat__label">用时</div>
-                                          <div className="tm-stat__value">{formatDuration(plan.durationSeconds)}</div>
-                                        </div>
-                                        <div className="tm-stat tm-stat--cost">
-                                          <span className="tm-stat__icon">
-                                            <CoinIcon />
-                                          </span>
-                                          <div className="tm-stat__label">费用</div>
-                                          <div className="tm-stat__value">{formatYuan(plan.costYuan)}</div>
-                                        </div>
-                                        <div className="tm-stat tm-stat--walk">
-                                          <span className="tm-stat__icon">
-                                            <WalkIcon />
-                                          </span>
-                                          <div className="tm-stat__label">步行</div>
-                                          <div className="tm-stat__value">
-                                            {plan.walkingDistanceMeters !== null ? formatDistance(plan.walkingDistanceMeters) : '—'}
+                                      <div className="tm-plan__statswrap" aria-label="整体行程信息">
+                                        <div className="tm-plan__stats">
+                                          <div className="tm-stat tm-stat--time">
+                                            <span className="tm-stat__icon">
+                                              <ClockIcon />
+                                            </span>
+                                            <div className="tm-stat__row">
+                                              <span className="tm-stat__label">用时</span>
+                                              <span className="tm-stat__value">{formatDurationCompact(plan.durationSeconds)}</span>
+                                            </div>
+                                          </div>
+                                          <div className="tm-stat tm-stat--cost">
+                                            <span className="tm-stat__icon">
+                                              <CoinIcon />
+                                            </span>
+                                            <div className="tm-stat__row">
+                                              <span className="tm-stat__label">费用</span>
+                                              <span className="tm-stat__value">{formatYuan(plan.costYuan)}</span>
+                                            </div>
+                                          </div>
+                                          <div className="tm-stat tm-stat--walk">
+                                            <span className="tm-stat__icon">
+                                              <WalkIcon />
+                                            </span>
+                                            <div className="tm-stat__row">
+                                              <span className="tm-stat__label">步行</span>
+                                              <span className="tm-stat__value">
+                                                {plan.walkingDistanceMeters !== null ? formatDistanceCompact(plan.walkingDistanceMeters) : '—'}
+                                              </span>
+                                            </div>
                                           </div>
                                         </div>
-                                        {plan.hasTaxi ? <div className="tm-stat tm-stat--badge">含打车段</div> : null}
+                                        {plan.hasTaxi ? <div className="tm-plan__note">含打车段</div> : null}
                                       </div>
 
                                       {legs.length ? (
@@ -414,7 +461,11 @@ function App() {
                                                     <CarIcon />
                                                   ) : null}
                                                 </span>
-                                                <span className="tm-seg__text">{l.label}</span>
+                                                <span className="tm-seg__text">
+                                                  {l.kind === 'walking' && typeof l.distanceMeters === 'number'
+                                                    ? `步行 ${formatDistanceCompact(l.distanceMeters)}`
+                                                    : l.label}
+                                                </span>
                                               </span>
                                               {idx < arr.length - 1 ? <span className="tm-timeline__arrow">→</span> : null}
                                             </span>

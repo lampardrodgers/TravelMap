@@ -111,7 +111,8 @@ export async function resolvePlace({ text, city, cityLimit }) {
   // 1) POI 文本搜索（更适合酒店/地标）
   const poiJson = await amapGetJson('place/text', {
     keywords: text,
-    extensions: 'base',
+    // 用 all 拿到 entr_location 等字段；大型 POI（机场/园区/商场）用 location 往往是“中心点”，会导致公交规划偏离真实出入口
+    extensions: 'all',
     offset: 1,
     page: 1,
     city: city || undefined,
@@ -121,8 +122,9 @@ export async function resolvePlace({ text, city, cityLimit }) {
   /** @type {any[]} */
   const pois = poiJson?.pois || []
   const firstPoi = pois[0]
-  if (firstPoi?.location) {
-    const location = parseLocation(firstPoi.location)
+  const poiLocationText = firstPoi?.entr_location || firstPoi?.location
+  if (poiLocationText) {
+    const location = parseLocation(poiLocationText)
     if (!location) throw new Error(`POI 解析失败：location=${firstPoi.location}`)
     return {
       input: text,
@@ -193,7 +195,7 @@ function summarizeTransitSegment(segment) {
     const meters = parseNumber(walking.distance) ?? 0
     if (meters > 0) {
       parts.push(`步行${Math.round(meters)}m`)
-      legs.push({ kind: 'walking', label: '步行' })
+      legs.push({ kind: 'walking', label: '步行', distanceMeters: Math.round(meters) })
     }
   }
 
@@ -222,7 +224,7 @@ function summarizeTransitSegment(segment) {
     hasTaxi = true
     const dist = parseNumber(taxi.distance)
     parts.push(`打车${dist !== null ? `${Math.round(dist)}m` : ''}`)
-    legs.push({ kind: 'taxi', label: '打车' })
+    legs.push({ kind: 'taxi', label: '打车', distanceMeters: dist !== null ? Math.round(dist) : undefined })
   }
 
   return { text: parts.filter(Boolean).join(' → '), hasTaxi, legs }
