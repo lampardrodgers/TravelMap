@@ -6,6 +6,7 @@ export type MapViewHandle = {
   setPoints: (params: { hotels: ResolvedPlace[]; places: ResolvedPlace[]; selectedHotelIdx: number | null }) => void
   showRoute: (params: { polylines: RoutePolyline[]; segments?: RouteSegment[] }) => void
   clearRoute: () => void
+  resize: () => void
 }
 
 export type RouteSegment = {
@@ -22,6 +23,7 @@ type AMapMap = {
   addControl: (control: unknown) => void
   setCenter: (center: [number, number]) => void
   setFitView: (overlays?: unknown[]) => void
+  resize?: () => void
   getZoom?: () => number
   on?: (event: string, handler: () => void) => void
   off?: (event: string, handler: () => void) => void
@@ -336,6 +338,9 @@ export const MapView = forwardRef<MapViewHandle>(function MapView(_props, ref) {
       setPoints,
       showRoute,
       clearRoute,
+      resize: () => {
+        mapRef.current?.resize?.()
+      },
     }),
     [clearRoute, setPoints, showRoute],
   )
