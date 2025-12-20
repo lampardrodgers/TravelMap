@@ -9,26 +9,32 @@
   --tm-blue-2: #2563eb;
   --tm-violet: #a78bfa;
   --tm-green: #34d399;
-	  --tm-red: #f87171;
-	  --tm-slate: #94a3b8;
-	  height: 100vh;
-	  width: 100vw;
-	  display: grid;
-	  grid-template-columns: var(--tm-sidebar-w, 520px) 10px 1fr;
-	  background: #0b1220;
-	  color: #e5e7eb;
-	}
+  --tm-red: #f87171;
+  --tm-slate: #94a3b8;
+  height: 100vh;
+  width: 100vw;
+  max-height: 100vh;
+  max-width: 100vw;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: var(--tm-sidebar-w, 520px) 10px 1fr;
+  background: #0b1220;
+  color: #e5e7eb;
+  box-sizing: border-box;
+}
 
 .tm-sidebar {
-	  height: 100vh;
-	  overflow: auto;
-	  padding: 16px;
-	  background: linear-gradient(180deg, rgba(15, 23, 42, 0.95), rgba(2, 6, 23, 0.95));
-	}
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 16px;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.95), rgba(2, 6, 23, 0.95));
+  box-sizing: border-box;
+}
 
 .tm-splitter {
   position: relative;
-  height: 100vh;
+  height: 100%;
   cursor: col-resize;
   touch-action: none;
   background: rgba(255, 255, 255, 0.02);
@@ -273,11 +279,11 @@
 }
 
 .tm-section__title {
-	  font-size: 13px;
-	  font-weight: 800;
-	  margin-bottom: 10px;
-	  color: rgba(229, 231, 235, 0.92);
-	}
+  font-size: 13px;
+  font-weight: 800;
+  margin-bottom: 10px;
+  color: rgba(229, 231, 235, 0.92);
+}
 
 .tm-section__head {
   display: flex;
@@ -560,7 +566,7 @@
   color: rgba(229, 231, 235, 0.65);
   line-height: 1.4;
   margin-bottom: 8px;
-	}
+}
 
 .tm-candidate {
   margin-top: 10px;
@@ -985,7 +991,8 @@
 }
 
 .tm-mapwrap {
-  height: 100vh;
+  height: 100%;
+  overflow: hidden;
 }
 
 .tm-map {
@@ -1088,6 +1095,7 @@
   justify-content: flex-end;
   gap: 8px;
 }
+
 .tm-route-label {
   max-width: 160px;
   padding: 4px 8px;
@@ -1133,20 +1141,24 @@
 }
 
 @media (max-width: 980px) {
-	  .tm-root {
-	    grid-template-columns: 1fr;
-	    grid-template-rows: 58vh 42vh;
-	  }
-	  .tm-sidebar {
-	    height: 58vh;
-	  }
-	  .tm-splitter {
-	    display: none;
-	  }
-	  .tm-mapwrap {
-	    height: 42vh;
-	  }
-	  .tm-grid2 {
-	    grid-template-columns: 1fr;
-	  }
-	}
+  .tm-root {
+    grid-template-columns: 1fr;
+    grid-template-rows: 58vh 42vh;
+  }
+
+  .tm-sidebar {
+    height: 58vh;
+  }
+
+  .tm-splitter {
+    display: none;
+  }
+
+  .tm-mapwrap {
+    height: 42vh;
+  }
+
+  .tm-grid2 {
+    grid-template-columns: 1fr;
+  }
+}
