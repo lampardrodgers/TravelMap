@@ -10,12 +10,14 @@ const requestLimiter = createRateLimiter({
   minIntervalMs: Number.isFinite(AMAP_QPS) && AMAP_QPS > 0 ? Math.ceil(1000 / AMAP_QPS) : 350,
 })
 
-export function getAmapKey() {
+export function getAmapKey(override) {
+  const custom = typeof override === 'string' ? override.trim() : ''
+  if (custom) return custom
   return process.env.AMAP_WEB_KEY || process.env.AMAP_KEY || process.env.VITE_AMAP_KEY || ''
 }
 
-function requireAmapKey() {
-  const key = getAmapKey()
+function requireAmapKey(override) {
+  const key = getAmapKey(override)
   if (!key) throw new Error('缺少高德 Key：请设置 AMAP_WEB_KEY 或 AMAP_KEY（也可复用 VITE_AMAP_KEY）')
   return key
 }
@@ -29,8 +31,8 @@ function buildUrl(pathname, params) {
   return url
 }
 
-async function amapGetJson(pathname, params) {
-  const url = buildUrl(pathname, { ...params, key: requireAmapKey() })
+async function amapGetJson(pathname, params, amapKey) {
+  const url = buildUrl(pathname, { ...params, key: requireAmapKey(amapKey) })
   const maxRetries = Number.isFinite(AMAP_MAX_RETRIES) ? Math.max(0, Math.min(AMAP_MAX_RETRIES, 8)) : 3
 
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
@@ -74,7 +76,7 @@ export function lngLatToText(lngLat) {
   return `${lngLat.lng},${lngLat.lat}`
 }
 
-export async function resolvePlace({ text, city, cityLimit }) {
+export async function resolvePlace({ text, city, cityLimit, amapKey }) {
   const coord = parseLngLatText(text)
   if (coord) {
     try {
@@ -82,7 +84,7 @@ export async function resolvePlace({ text, city, cityLimit }) {
         location: lngLatToText(coord),
         extensions: 'base',
         radius: 1000,
-      })
+      }, amapKey)
       const comp = regeo?.regeocode?.addressComponent
       const formatted = regeo?.regeocode?.formatted_address
       return {
@@ -117,7 +119,7 @@ export async function resolvePlace({ text, city, cityLimit }) {
     page: 1,
     city: city || undefined,
     citylimit: cityLimit && city ? 'true' : undefined,
-  })
+  }, amapKey)
 
   /** @type {any[]} */
   const pois = poiJson?.pois || []
@@ -141,7 +143,7 @@ export async function resolvePlace({ text, city, cityLimit }) {
   const geoJson = await amapGetJson('geocode/geo', {
     address: text,
     city: city || undefined,
-  })
+  }, amapKey)
   /** @type {any[]} */
   const geocodes = geoJson?.geocodes || []
   const firstGeo = geocodes[0]
@@ -186,7 +188,7 @@ function buildPoiCandidates({ text, pois }) {
   return candidates
 }
 
-export async function searchPlaceCandidates({ text, city, cityLimit, limit }) {
+export async function searchPlaceCandidates({ text, city, cityLimit, limit, amapKey }) {
   const coord = parseLngLatText(text)
   if (coord) return []
 
@@ -198,7 +200,7 @@ export async function searchPlaceCandidates({ text, city, cityLimit, limit }) {
     page: 1,
     city: city || undefined,
     citylimit: cityLimit && city ? 'true' : undefined,
-  })
+  }, amapKey)
 
   /** @type {any[]} */
   const pois = poiJson?.pois || []
@@ -208,7 +210,7 @@ export async function searchPlaceCandidates({ text, city, cityLimit, limit }) {
   const geoJson = await amapGetJson('geocode/geo', {
     address: text,
     city: city || undefined,
-  })
+  }, amapKey)
   /** @type {any[]} */
   const geocodes = geoJson?.geocodes || []
   const geoCandidates = []
@@ -229,13 +231,13 @@ export async function searchPlaceCandidates({ text, city, cityLimit, limit }) {
   return geoCandidates
 }
 
-export async function getDrivingSummary({ origin, destination }) {
+export async function getDrivingSummary({ origin, destination, amapKey }) {
   const json = await amapGetJson('direction/driving', {
     origin: lngLatToText(origin),
     destination: lngLatToText(destination),
     extensions: 'all',
     strategy: 0,
-  })
+  }, amapKey)
 
   const route = json?.route
   const firstPath = route?.paths?.[0]
@@ -297,7 +299,7 @@ function summarizeTransitSegment(segment) {
   return { text: parts.filter(Boolean).join(' → '), hasTaxi, legs }
 }
 
-export async function getTransitSummary({ origin, destination, city, cityd, strategy, maxPlans }) {
+export async function getTransitSummary({ origin, destination, city, cityd, strategy, maxPlans, amapKey }) {
   const json = await amapGetJson('direction/transit/integrated', {
     origin: lngLatToText(origin),
     destination: lngLatToText(destination),
@@ -305,7 +307,7 @@ export async function getTransitSummary({ origin, destination, city, cityd, stra
     cityd: cityd || '',
     extensions: 'base',
     strategy: strategy ?? 0,
-  })
+  }, amapKey)
 
   /** @type {any[]} */
   const transits = json?.route?.transits || []
@@ -342,13 +344,13 @@ function polylineTextToPath(polylineText) {
     .filter(Boolean)
 }
 
-export async function getDrivingRoutePolylines({ origin, destination }) {
+export async function getDrivingRoutePolylines({ origin, destination, amapKey }) {
   const json = await amapGetJson('direction/driving', {
     origin: lngLatToText(origin),
     destination: lngLatToText(destination),
     extensions: 'all',
     strategy: 0,
-  })
+  }, amapKey)
 
   const route = json?.route
   const firstPath = route?.paths?.[0]
@@ -365,7 +367,7 @@ export async function getDrivingRoutePolylines({ origin, destination }) {
   }
 }
 
-export async function getTransitRoutePolylines({ origin, destination, city, cityd, strategy, planIndex }) {
+export async function getTransitRoutePolylines({ origin, destination, city, cityd, strategy, planIndex, amapKey }) {
   const json = await amapGetJson('direction/transit/integrated', {
     origin: lngLatToText(origin),
     destination: lngLatToText(destination),
@@ -373,7 +375,7 @@ export async function getTransitRoutePolylines({ origin, destination, city, city
     cityd: cityd || '',
     extensions: 'base',
     strategy: strategy ?? 0,
-  })
+  }, amapKey)
 
   /** @type {any[]} */
   const transits = json?.route?.transits || []

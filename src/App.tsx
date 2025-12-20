@@ -10,7 +10,50 @@ function toErrorMessage(err: unknown) {
 
 type TransitLeg = { kind: 'walking' | 'taxi' | 'bus' | 'subway' | 'railway'; label: string; distanceMeters?: number }
 
+type Settings = { amapKey: string; candidateLimit: number }
+type SettingsDraft = { amapKey: string; candidateLimit: string }
+
+const SETTINGS_STORAGE_KEY = 'travelmap-settings-v1'
+const DEFAULT_SETTINGS: Settings = { amapKey: '', candidateLimit: 8 }
+
+const clampCandidateLimit = (value: number) => {
+  if (!Number.isFinite(value)) return DEFAULT_SETTINGS.candidateLimit
+  return Math.max(1, Math.min(20, Math.round(value)))
+}
+
+const loadSettings = (): Settings => {
+  if (typeof window === 'undefined') return { ...DEFAULT_SETTINGS }
+  try {
+    const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY)
+    if (!raw) return { ...DEFAULT_SETTINGS }
+    const parsed = JSON.parse(raw) as Partial<Settings>
+    return {
+      amapKey: typeof parsed.amapKey === 'string' ? parsed.amapKey : DEFAULT_SETTINGS.amapKey,
+      candidateLimit: clampCandidateLimit(Number(parsed.candidateLimit ?? DEFAULT_SETTINGS.candidateLimit)),
+    }
+  } catch {
+    return { ...DEFAULT_SETTINGS }
+  }
+}
+
+const saveSettings = (next: Settings) => {
+  try {
+    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(next))
+  } catch {
+    // ignore
+  }
+}
+
+const normalizeSettings = (draft: SettingsDraft, fallback: Settings): Settings => {
+  const nextLimit = Number.parseInt(draft.candidateLimit, 10)
+  return {
+    amapKey: draft.amapKey.trim(),
+    candidateLimit: Number.isFinite(nextLimit) ? clampCandidateLimit(nextLimit) : fallback.candidateLimit,
+  }
+}
+
 function App() {
+  const initialSettings = useMemo(() => loadSettings(), [])
   const [city, setCity] = useState('')
   const [cityLimit, setCityLimit] = useState(true)
   const [hotelsText, setHotelsText] = useState('')
@@ -28,6 +71,12 @@ function App() {
   const [candidateLoadingKey, setCandidateLoadingKey] = useState<string | null>(null)
   const [candidateApplyingKey, setCandidateApplyingKey] = useState<string | null>(null)
   const [candidateError, setCandidateError] = useState<string | null>(null)
+  const [settings, setSettings] = useState<Settings>(initialSettings)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsDraft, setSettingsDraft] = useState<SettingsDraft>({
+    amapKey: initialSettings.amapKey,
+    candidateLimit: String(initialSettings.candidateLimit),
+  })
   const mapRef = useRef<MapViewHandle | null>(null)
   const candidateRequestRef = useRef<string | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(520)
@@ -133,6 +182,10 @@ function App() {
     return `¥${value.toFixed(1).replace(/\\.0$/, '')}`
   }
 
+  const amapKeyOverride = settings.amapKey.trim()
+  const runtimeAmapKey = amapKeyOverride ? amapKeyOverride : undefined
+  const candidateLimit = clampCandidateLimit(settings.candidateLimit)
+
   const isSameLocation = (a: { lng: number; lat: number }, b: { lng: number; lat: number }) =>
     Math.abs(a.lng - b.lng) < 1e-6 && Math.abs(a.lat - b.lat) < 1e-6
 
@@ -151,9 +204,51 @@ function App() {
 
   const candidateKey = (kind: 'hotel' | 'place', idx: number) => `${kind}-${idx}`
 
+  const openSettingsPanel = () => {
+    setSettingsDraft({ amapKey: settings.amapKey, candidateLimit: String(settings.candidateLimit) })
+    setSettingsOpen(true)
+  }
+
+  const closeSettingsPanel = () => {
+    setSettingsOpen(false)
+    setSettingsDraft({ amapKey: settings.amapKey, candidateLimit: String(settings.candidateLimit) })
+  }
+
+  const saveSettingsPanel = () => {
+    const next = normalizeSettings(settingsDraft, settings)
+    setSettings(next)
+    setSettingsOpen(false)
+  }
+
+  const saveSettingsLocal = () => {
+    const next = normalizeSettings(settingsDraft, settings)
+    setSettings(next)
+    saveSettings(next)
+  }
+
+  const clearSettingsLocal = () => {
+    if (!window.confirm('确定要清除本地设置吗？此操作不可撤销。')) return
+    try {
+      window.localStorage.removeItem(SETTINGS_STORAGE_KEY)
+    } catch {
+      // ignore
+    }
+    setSettings({ ...DEFAULT_SETTINGS })
+    setSettingsDraft({
+      amapKey: DEFAULT_SETTINGS.amapKey,
+      candidateLimit: String(DEFAULT_SETTINGS.candidateLimit),
+    })
+  }
+
   const selectHotel = (idx: number | null, nextData: CompareResponse | null = data) => {
     if (idx !== selectedHotelIdx && nextData) {
       setExpandedPlaces(Array.from({ length: nextData.places.length }, () => false))
+    }
+    if (idx !== selectedHotelIdx) {
+      setCandidatePanel(null)
+      setCandidateList([])
+      setCandidateError(null)
+      setCandidateLoadingKey(null)
     }
     setSelectedHotelIdx(idx)
     if (!nextData) return
@@ -174,7 +269,8 @@ function App() {
         text: item.input,
         city: city.trim() || undefined,
         cityLimit,
-        limit: 8,
+        limit: candidateLimit,
+        amapKey: runtimeAmapKey,
       })
       if (candidateRequestRef.current !== key) return
       const list = Array.isArray(resp.candidates) ? resp.candidates : []
@@ -206,6 +302,7 @@ function App() {
         reversePlaces,
         onlyPlaceIdx: kind === 'place' ? idx : null,
         onlyHotelIdx: kind === 'hotel' ? idx : null,
+        amapKey: runtimeAmapKey,
       })
 
       const nextData = {
@@ -240,6 +337,7 @@ function App() {
         hotels,
         places,
         reversePlaces: nextReversePlaces,
+        amapKey: runtimeAmapKey,
       })
       setData(resp)
       setExpandedPlaces(Array.from({ length: resp.places.length }, () => false))
@@ -275,6 +373,7 @@ function App() {
         places: data.places,
         reversePlaces: nextReversePlaces,
         onlyPlaceIdx: placeIdx,
+        amapKey: runtimeAmapKey,
       })
 
       const merged = mergeComparisons(data.comparisons, resp.comparisons)
@@ -305,6 +404,7 @@ function App() {
         city: city.trim() || originPlace.citycode || undefined,
         cityd: city.trim() || destPlace.citycode || undefined,
         planIndex: params.planIndex,
+        amapKey: runtimeAmapKey,
       })
       mapRef.current?.showRoute({ polylines: resp.polylines, segments: resp.segments })
     } catch (err) {
@@ -344,7 +444,12 @@ function App() {
         ) : candidateError ? (
           <div className="tm-error tm-error--inline">{candidateError}</div>
         ) : candidateList.length ? (
-          <div className="tm-candidate__list">
+          <div
+            className="tm-candidate__list"
+            onMouseLeave={() => {
+              mapRef.current?.highlightCandidate(null)
+            }}
+          >
             {candidateList.map((c, i) => {
               const selected = isSameLocation(c.location, current.location)
               const disabled = applying || selected
@@ -358,8 +463,12 @@ function App() {
                     if (disabled) return
                     applyCandidate(kind, idx, c)
                   }}
+                  onMouseEnter={() => {
+                    mapRef.current?.highlightCandidate(i)
+                  }}
                 >
                   <div className="tm-candidate__name">
+                    <span className="tm-candidate__badge">{`C${i + 1}`}</span>
                     <span>{c.name}</span>
                     {selected ? <span className="tm-badge">已选</span> : null}
                   </div>
@@ -385,6 +494,20 @@ function App() {
       if (resizeRafRef.current) cancelAnimationFrame(resizeRafRef.current)
     }
   }, [sidebarWidth])
+
+  useEffect(() => {
+    if (!candidatePanel) {
+      mapRef.current?.clearCandidates()
+      mapRef.current?.highlightCandidate(null)
+      return
+    }
+    if (candidateList.length > 0) {
+      mapRef.current?.setCandidates({ candidates: candidateList })
+    } else {
+      mapRef.current?.clearCandidates()
+    }
+    mapRef.current?.highlightCandidate(null)
+  }, [candidateList, candidatePanel])
 
   const clampSidebarWidth = (next: number) => {
     const min = 360
@@ -421,7 +544,12 @@ function App() {
     <div className="tm-root" style={rootStyle}>
       <div className="tm-sidebar">
         <div className="tm-head">
-          <div className="tm-head__title">TravelMap</div>
+          <div className="tm-head__row">
+            <div className="tm-head__title">TravelMap</div>
+            <button className="tm-btn tm-btn--small tm-btn--ghost" type="button" onClick={openSettingsPanel}>
+              设置
+            </button>
+          </div>
           <div className="tm-head__desc">酒店对比：打车/公交耗时与费用，一眼选出更合适的落脚点</div>
         </div>
 
@@ -816,8 +944,67 @@ function App() {
         onPointerCancel={endSplitterDrag}
       />
       <div className="tm-mapwrap">
-        <MapView ref={mapRef} />
+        <MapView ref={mapRef} amapKey={runtimeAmapKey} />
       </div>
+
+      {settingsOpen ? (
+        <div
+          className="tm-modal"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => {
+            closeSettingsPanel()
+          }}
+        >
+          <div
+            className="tm-modal__panel"
+            onClick={(e) => {
+              e.stopPropagation()
+            }}
+          >
+            <div className="tm-modal__head">设置</div>
+            <div className="tm-modal__body">
+              <div className="tm-field">
+                <label className="tm-label">高德 API Key（可留空）</label>
+                <div className="tm-field__row">
+                  <input
+                    className="tm-input"
+                    value={settingsDraft.amapKey}
+                    onChange={(e) => setSettingsDraft((prev) => ({ ...prev, amapKey: e.target.value }))}
+                    placeholder="留空则使用 .env 中的 VITE_AMAP_KEY / AMAP_WEB_KEY"
+                  />
+                  <button className="tm-btn tm-btn--small tm-btn--primary" type="button" onClick={saveSettingsLocal}>
+                    保存到本地
+                  </button>
+                </div>
+                <div className="tm-field__hint">点“保存到本地”才会写入浏览器缓存。</div>
+              </div>
+              <div className="tm-field">
+                <label className="tm-label">匹配有误：最多显示候选数</label>
+                <input
+                  className="tm-input"
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={settingsDraft.candidateLimit}
+                  onChange={(e) => setSettingsDraft((prev) => ({ ...prev, candidateLimit: e.target.value }))}
+                />
+              </div>
+            </div>
+            <div className="tm-modal__actions">
+              <button className="tm-btn tm-btn--ghost" type="button" onClick={closeSettingsPanel}>
+                取消
+              </button>
+              <button className="tm-btn tm-btn--ghost" type="button" onClick={clearSettingsLocal}>
+                清除本地设置
+              </button>
+              <button className="tm-btn tm-btn--ghost" type="button" onClick={saveSettingsPanel}>
+                仅本次保存
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

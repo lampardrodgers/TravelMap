@@ -100,6 +100,7 @@ export async function comparePlaces(payload: {
   reversePlaces?: boolean[]
   transitStrategy?: number
   maxTransitPlans?: number
+  amapKey?: string
 }): Promise<CompareResponse> {
   const resp = await fetch('/api/compare', {
     method: 'POST',
@@ -118,6 +119,7 @@ export async function recompareResolved(payload: {
   maxTransitPlans?: number
   onlyPlaceIdx?: number | null
   onlyHotelIdx?: number | null
+  amapKey?: string
 }): Promise<RecompareResponse> {
   const resp = await fetch('/api/recompare', {
     method: 'POST',
@@ -132,6 +134,7 @@ export async function fetchCandidates(payload: {
   city?: string
   cityLimit?: boolean
   limit?: number
+  amapKey?: string
 }): Promise<CandidatesResponse> {
   const resp = await fetch('/api/candidates', {
     method: 'POST',
@@ -149,6 +152,7 @@ export async function fetchRoute(payload: {
   cityd?: string
   strategy?: number
   planIndex?: number
+  amapKey?: string
 }): Promise<RouteResponse> {
   const resp = await fetch('/api/route', {
     method: 'POST',

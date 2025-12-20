@@ -4,6 +4,9 @@ import type { LngLat, ResolvedPlace, RoutePolyline } from '../api'
 
 export type MapViewHandle = {
   setPoints: (params: { hotels: ResolvedPlace[]; places: ResolvedPlace[]; selectedHotelIdx: number | null }) => void
+  setCandidates: (params: { candidates: ResolvedPlace[] }) => void
+  clearCandidates: () => void
+  highlightCandidate: (index: number | null) => void
   showRoute: (params: { polylines: RoutePolyline[]; segments?: RouteSegment[] }) => void
   clearRoute: () => void
   resize: () => void
@@ -39,11 +42,19 @@ type AMapNamespace = {
   Scale: new () => unknown
 }
 
-type AMapMarkerLike = { show?: () => void; hide?: () => void }
+type AMapMarkerLike = { show?: () => void; hide?: () => void; setContent?: (content: string) => void }
 
-function createMarkerHtml(label: string, variant: 'hotel' | 'place' | 'selected') {
+function createMarkerHtml(label: string, variant: 'hotel' | 'place' | 'selected' | 'candidate' | 'candidate-active') {
   const cls =
-    variant === 'selected' ? 'tm-marker tm-marker--selected' : variant === 'hotel' ? 'tm-marker tm-marker--hotel' : 'tm-marker tm-marker--place'
+    variant === 'selected'
+      ? 'tm-marker tm-marker--selected'
+      : variant === 'hotel'
+        ? 'tm-marker tm-marker--hotel'
+        : variant === 'candidate'
+          ? 'tm-marker tm-marker--candidate'
+          : variant === 'candidate-active'
+            ? 'tm-marker tm-marker--candidate tm-marker--candidate-active'
+            : 'tm-marker tm-marker--place'
   return `<div class="${cls}">${label}</div>`
 }
 
@@ -52,19 +63,30 @@ function normalizeCenter(points: ResolvedPlace[]): LngLat | null {
   return points[0].location
 }
 
-export const MapView = forwardRef<MapViewHandle>(function MapView(_props, ref) {
+export const MapView = forwardRef<MapViewHandle, { amapKey?: string }>(function MapView({ amapKey: amapKeyOverride }, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<AMapMap | null>(null)
   const amapRef = useRef<AMapNamespace | null>(null)
   const markerOverlaysRef = useRef<unknown[]>([])
+  const candidateOverlaysRef = useRef<unknown[]>([])
+  const candidateMarkersRef = useRef<Array<{ marker: unknown; label: string }>>([])
   const routeOverlaysRef = useRef<unknown[]>([])
   const routeLabelMarkersRef = useRef<Array<{ marker: unknown; kind: RoutePolyline['kind'] }>>([])
   const pendingPointsRef = useRef<{ hotels: ResolvedPlace[]; places: ResolvedPlace[]; selectedHotelIdx: number | null } | null>(null)
   const pendingRouteRef = useRef<{ polylines: RoutePolyline[]; segments?: RouteSegment[] } | null>(null)
+  const pendingCandidatesRef = useRef<{ candidates: ResolvedPlace[] } | null>(null)
+  const lastPointsRef = useRef<{ hotels: ResolvedPlace[]; places: ResolvedPlace[]; selectedHotelIdx: number | null } | null>(null)
+  const lastRouteRef = useRef<{ polylines: RoutePolyline[]; segments?: RouteSegment[] } | null>(null)
+  const lastCandidatesRef = useRef<{ candidates: ResolvedPlace[] } | null>(null)
   const onZoomEndRef = useRef<(() => void) | null>(null)
-  const amapKey = import.meta.env.VITE_AMAP_KEY as string | undefined
+  const envAmapKey = import.meta.env.VITE_AMAP_KEY as string | undefined
+  const amapKey = amapKeyOverride || envAmapKey
   const securityJsCode = import.meta.env.VITE_AMAP_SECURITY_CODE as string | undefined
-  const [loadError, setLoadError] = useState<string | null>(() => (!amapKey ? '缺少 VITE_AMAP_KEY，无法加载地图' : null))
+  const [loadError, setLoadError] = useState<string | null>(() => (!amapKey ? '缺少高德 Key，无法加载地图' : null))
+
+  useEffect(() => {
+    setLoadError(!amapKey ? '缺少高德 Key，无法加载地图' : null)
+  }, [amapKey])
 
   const clearMarkers = useCallback(() => {
     const map = mapRef.current
@@ -73,15 +95,28 @@ export const MapView = forwardRef<MapViewHandle>(function MapView(_props, ref) {
     markerOverlaysRef.current = []
   }, [])
 
+  const clearCandidates = useCallback(() => {
+    const map = mapRef.current
+    pendingCandidatesRef.current = null
+    lastCandidatesRef.current = null
+    if (!map) return
+    candidateOverlaysRef.current.forEach((o) => map.remove(o))
+    candidateOverlaysRef.current = []
+    candidateMarkersRef.current = []
+  }, [])
+
   const clearRoute = useCallback(() => {
     const map = mapRef.current
+    pendingRouteRef.current = null
     if (!map) return
     routeOverlaysRef.current.forEach((o) => map.remove(o))
     routeOverlaysRef.current = []
     routeLabelMarkersRef.current = []
+    lastRouteRef.current = null
   }, [])
 
   const setPoints = useCallback(({ hotels, places, selectedHotelIdx }: { hotels: ResolvedPlace[]; places: ResolvedPlace[]; selectedHotelIdx: number | null }) => {
+    lastPointsRef.current = { hotels, places, selectedHotelIdx }
     const AMap = amapRef.current
     const map = mapRef.current
     if (!AMap || !map) {
@@ -90,6 +125,7 @@ export const MapView = forwardRef<MapViewHandle>(function MapView(_props, ref) {
     }
 
     clearRoute()
+    clearCandidates()
     clearMarkers()
 
     const overlays: unknown[] = []
@@ -120,9 +156,48 @@ export const MapView = forwardRef<MapViewHandle>(function MapView(_props, ref) {
     const center = normalizeCenter(hotels) || normalizeCenter(places)
     if (center) map.setCenter([center.lng, center.lat])
     if (overlays.length > 0) map.setFitView(overlays)
-  }, [clearMarkers, clearRoute])
+  }, [clearCandidates, clearMarkers, clearRoute])
+
+  const setCandidates = useCallback(({ candidates }: { candidates: ResolvedPlace[] }) => {
+    lastCandidatesRef.current = { candidates }
+    const AMap = amapRef.current
+    const map = mapRef.current
+    if (!AMap || !map) {
+      pendingCandidatesRef.current = { candidates }
+      return
+    }
+
+    clearCandidates()
+
+    const overlays: unknown[] = []
+    const markers: Array<{ marker: unknown; label: string }> = []
+    candidates.forEach((c, idx) => {
+      const label = `C${idx + 1}`
+      const marker = new AMap.Marker({
+        position: [c.location.lng, c.location.lat],
+        title: c.name,
+        content: createMarkerHtml(label, 'candidate'),
+        offset: new AMap.Pixel(-12, -12),
+      })
+      overlays.push(marker)
+      markers.push({ marker, label })
+    })
+
+    overlays.forEach((o) => map.add(o))
+    candidateOverlaysRef.current = overlays
+    candidateMarkersRef.current = markers
+  }, [clearCandidates])
+
+  const highlightCandidate = useCallback((index: number | null) => {
+    candidateMarkersRef.current.forEach((item, idx) => {
+      const markerApi = item.marker as unknown as AMapMarkerLike
+      const variant = index !== null && idx === index ? 'candidate-active' : 'candidate'
+      markerApi?.setContent?.(createMarkerHtml(item.label, variant))
+    })
+  }, [])
 
   const showRoute = useCallback(({ polylines, segments }: { polylines: RoutePolyline[]; segments?: RouteSegment[] }) => {
+    lastRouteRef.current = { polylines, segments }
     const AMap = amapRef.current
     const map = mapRef.current
     if (!AMap || !map) {
@@ -301,15 +376,20 @@ export const MapView = forwardRef<MapViewHandle>(function MapView(_props, ref) {
         onZoomEndRef.current = onZoomEnd
         map?.on?.('zoomend', onZoomEnd)
 
-        if (pendingPointsRef.current) {
-          const pending = pendingPointsRef.current
+        const nextCandidates = pendingCandidatesRef.current || lastCandidatesRef.current
+        const nextRoute = pendingRouteRef.current || lastRouteRef.current
+        const nextPoints = pendingPointsRef.current || lastPointsRef.current
+        if (nextPoints) {
           pendingPointsRef.current = null
-          setPoints(pending)
+          setPoints(nextPoints)
         }
-        if (pendingRouteRef.current) {
-          const pending = pendingRouteRef.current
+        if (nextCandidates) {
+          pendingCandidatesRef.current = null
+          setCandidates(nextCandidates)
+        }
+        if (nextRoute) {
           pendingRouteRef.current = null
-          showRoute(pending)
+          showRoute(nextRoute)
         }
       })
       .catch((err: unknown) => {
@@ -330,19 +410,22 @@ export const MapView = forwardRef<MapViewHandle>(function MapView(_props, ref) {
       mapRef.current = null
       amapRef.current = null
     }
-  }, [amapKey, securityJsCode, setPoints, showRoute])
+  }, [amapKey, securityJsCode, setCandidates, setPoints, showRoute])
 
   useImperativeHandle(
     ref,
     () => ({
       setPoints,
+      setCandidates,
+      clearCandidates,
+      highlightCandidate,
       showRoute,
       clearRoute,
       resize: () => {
         mapRef.current?.resize?.()
       },
     }),
-    [clearRoute, setPoints, showRoute],
+    [clearCandidates, clearRoute, highlightCandidate, setCandidates, setPoints, showRoute],
   )
 
   return (

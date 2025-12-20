@@ -57,6 +57,7 @@ async function computeComparisons({
   transitStrategy,
   onlyPlaceIdx = null,
   onlyHotelIdx = null,
+  amapKey,
 }) {
   const limit = createConcurrencyLimiter(5)
   const comparisons = []
@@ -101,7 +102,7 @@ async function computeComparisons({
         comparisons.push(item)
 
         const [drivingResult, transitResult] = await Promise.allSettled([
-          limit(() => getDrivingSummary({ origin, destination })),
+          limit(() => getDrivingSummary({ origin, destination, amapKey })),
           limit(() =>
             getTransitSummary({
               origin,
@@ -110,6 +111,7 @@ async function computeComparisons({
               cityd: citydForTransit,
               strategy: transitStrategy,
               maxPlans: maxTransitPlans,
+              amapKey,
             }),
           ),
         ])
@@ -139,6 +141,7 @@ app.post('/api/compare', async (req, res) => {
     const places = Array.isArray(body.places) ? body.places : []
     const city = isNonEmptyString(body.city) ? body.city.trim() : null
     const cityLimit = body.cityLimit !== false
+    const amapKey = isNonEmptyString(body.amapKey) ? body.amapKey.trim() : null
     const maxTransitPlans = body.maxTransitPlans ?? 3
     const transitStrategy = body.transitStrategy ?? 0
 
@@ -166,7 +169,7 @@ app.post('/api/compare', async (req, res) => {
 
     const resolveCached = async (text) => {
       if (cache.has(text)) return cache.get(text)
-      const promise = limit(() => resolvePlace({ text, city, cityLimit }))
+      const promise = limit(() => resolvePlace({ text, city, cityLimit, amapKey }))
       cache.set(text, promise)
       return promise
     }
@@ -181,6 +184,7 @@ app.post('/api/compare', async (req, res) => {
       city,
       maxTransitPlans,
       transitStrategy,
+      amapKey,
     })
 
     return res.json({
@@ -200,11 +204,12 @@ app.post('/api/candidates', async (req, res) => {
     const text = isNonEmptyString(body.text) ? body.text.trim() : ''
     const city = isNonEmptyString(body.city) ? body.city.trim() : null
     const cityLimit = body.cityLimit !== false
+    const amapKey = isNonEmptyString(body.amapKey) ? body.amapKey.trim() : null
     const limit = body.limit ?? 8
 
     if (!text) return res.status(400).json({ error: 'text 不能为空' })
 
-    const candidates = await searchPlaceCandidates({ text, city, cityLimit, limit })
+    const candidates = await searchPlaceCandidates({ text, city, cityLimit, limit, amapKey })
     return res.json({ candidates })
   } catch (err) {
     return res.status(500).json({ error: String(err?.message || err) })
@@ -222,6 +227,7 @@ app.post('/api/recompare', async (req, res) => {
     const transitStrategy = body.transitStrategy ?? 0
     const onlyPlaceIdx = body.onlyPlaceIdx ?? null
     const onlyHotelIdx = body.onlyHotelIdx ?? null
+    const amapKey = isNonEmptyString(body.amapKey) ? body.amapKey.trim() : null
 
     if (hotels.length === 0) return res.status(400).json({ error: 'hotels 不能为空' })
     if (places.length === 0) return res.status(400).json({ error: 'places 不能为空' })
@@ -241,6 +247,7 @@ app.post('/api/recompare', async (req, res) => {
       transitStrategy,
       onlyPlaceIdx,
       onlyHotelIdx,
+      amapKey,
     })
 
     return res.json({
@@ -260,6 +267,7 @@ app.post('/api/route', async (req, res) => {
     const destination = body.destination
     const city = isNonEmptyString(body.city) ? body.city.trim() : null
     const cityd = isNonEmptyString(body.cityd) ? body.cityd.trim() : null
+    const amapKey = isNonEmptyString(body.amapKey) ? body.amapKey.trim() : null
     const strategy = body.strategy ?? 0
     const planIndex = body.planIndex ?? 0
 
@@ -275,7 +283,7 @@ app.post('/api/route', async (req, res) => {
     const d = { lng: Number(destination.lng), lat: Number(destination.lat) }
 
     if (mode === 'driving') {
-      const data = await getDrivingRoutePolylines({ origin: o, destination: d })
+      const data = await getDrivingRoutePolylines({ origin: o, destination: d, amapKey })
       return res.json({ mode, ...data })
     }
 
@@ -287,6 +295,7 @@ app.post('/api/route', async (req, res) => {
         cityd: cityd || '',
         strategy,
         planIndex,
+        amapKey,
       })
       return res.json({ mode, ...data })
     }
