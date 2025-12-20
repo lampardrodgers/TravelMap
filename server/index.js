@@ -6,8 +6,12 @@ import { fileURLToPath } from 'node:url'
 import {
   getDrivingRoutePolylines,
   getDrivingSummary,
+  getCyclingRoutePolylines,
+  getCyclingSummary,
   getTransitRoutePolylines,
   getTransitSummary,
+  getWalkingRoutePolylines,
+  getWalkingSummary,
   resolvePlace,
   searchPlaceCandidates,
 } from './amap.js'
@@ -98,11 +102,13 @@ async function computeComparisons({
         const cityForTransit = city || originCitycode || ''
         const citydForTransit = city || destCitycode || cityForTransit
 
-        const item = { hotelIdx, placeIdx, driving: null, transit: null, errors: null }
+        const item = { hotelIdx, placeIdx, driving: null, walking: null, cycling: null, transit: null, errors: null }
         comparisons.push(item)
 
-        const [drivingResult, transitResult] = await Promise.allSettled([
+        const [drivingResult, walkingResult, cyclingResult, transitResult] = await Promise.allSettled([
           limit(() => getDrivingSummary({ origin, destination, amapKey })),
+          limit(() => getWalkingSummary({ origin, destination, amapKey })),
+          limit(() => getCyclingSummary({ origin, destination, amapKey })),
           limit(() =>
             getTransitSummary({
               origin,
@@ -119,6 +125,16 @@ async function computeComparisons({
         if (drivingResult.status === 'fulfilled') item.driving = drivingResult.value
         if (drivingResult.status === 'rejected') {
           item.errors = { ...(item.errors || {}), driving: String(drivingResult.reason?.message || drivingResult.reason) }
+        }
+
+        if (walkingResult.status === 'fulfilled') item.walking = walkingResult.value
+        if (walkingResult.status === 'rejected') {
+          item.errors = { ...(item.errors || {}), walking: String(walkingResult.reason?.message || walkingResult.reason) }
+        }
+
+        if (cyclingResult.status === 'fulfilled') item.cycling = cyclingResult.value
+        if (cyclingResult.status === 'rejected') {
+          item.errors = { ...(item.errors || {}), cycling: String(cyclingResult.reason?.message || cyclingResult.reason) }
         }
 
         if (transitResult.status === 'fulfilled') item.transit = transitResult.value
@@ -300,7 +316,17 @@ app.post('/api/route', async (req, res) => {
       return res.json({ mode, ...data })
     }
 
-    return res.status(400).json({ error: 'mode 仅支持 driving/transit' })
+    if (mode === 'walking') {
+      const data = await getWalkingRoutePolylines({ origin: o, destination: d, amapKey })
+      return res.json({ mode, ...data })
+    }
+
+    if (mode === 'cycling') {
+      const data = await getCyclingRoutePolylines({ origin: o, destination: d, amapKey })
+      return res.json({ mode, ...data })
+    }
+
+    return res.status(400).json({ error: 'mode 仅支持 driving/transit/walking/cycling' })
   } catch (err) {
     return res.status(500).json({ error: String(err?.message || err) })
   }

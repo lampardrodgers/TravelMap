@@ -80,6 +80,24 @@ export function WalkIcon() {
   )
 }
 
+export function BikeIcon() {
+  return (
+    <IconBase>
+      <circle cx="6" cy="16.5" r="3" fill="none" stroke="currentColor" strokeWidth="2" />
+      <circle cx="18" cy="16.5" r="3" fill="none" stroke="currentColor" strokeWidth="2" />
+      <path
+        d="M10 7h3l2 4h-4l-2 5m0-5h4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M9 7h-2" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </IconBase>
+  )
+}
+
 export function PinIcon() {
   return (
     <IconBase>
@@ -131,6 +149,21 @@ export function CoinIcon() {
         strokeWidth="2"
         strokeLinecap="round"
         strokeLinejoin="round"
+      />
+    </IconBase>
+  )
+}
+
+export function SettingsIcon() {
+  return (
+    <IconBase>
+      <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="2" />
+      <path
+        d="M12 3v2m0 14v2m9-9h-2M5 12H3m14.36-6.36-1.42 1.42M7.06 16.94l-1.42 1.42m0-11.3 1.42 1.42m9.9 9.9 1.42 1.42"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
       />
     </IconBase>
   )

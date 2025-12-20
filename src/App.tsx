@@ -2,13 +2,14 @@ import './App.css'
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { comparePlaces, fetchCandidates, fetchRoute, recompareResolved, type CompareResponse, type Comparison, type ResolvedPlace } from './api'
 import { MapView, type MapViewHandle } from './components/MapView'
-import { BusIcon, CarIcon, ClockIcon, CoinIcon, PinIcon, SubwayIcon, WalkIcon } from './components/Icons'
+import { BikeIcon, BusIcon, CarIcon, ClockIcon, CoinIcon, PinIcon, SettingsIcon, SubwayIcon, WalkIcon } from './components/Icons'
 
 function toErrorMessage(err: unknown) {
   return err instanceof Error ? err.message : String(err)
 }
 
 type TransitLeg = { kind: 'walking' | 'taxi' | 'bus' | 'subway' | 'railway'; label: string; distanceMeters?: number }
+type TravelMode = 'driving' | 'walking' | 'cycling'
 
 type Settings = { amapKey: string; candidateLimit: number }
 type SettingsDraft = { amapKey: string; candidateLimit: string }
@@ -66,6 +67,8 @@ function App() {
   const [reversePlaces, setReversePlaces] = useState<boolean[]>([])
   const [reverseLoadingIdx, setReverseLoadingIdx] = useState<number | null>(null)
   const [routeLoadingKey, setRouteLoadingKey] = useState<string | null>(null)
+  const [travelModes, setTravelModes] = useState<TravelMode[]>([])
+  const [activeRoute, setActiveRoute] = useState<{ mode: TravelMode | 'transit'; placeIdx: number; planIndex?: number; hotelIdx: number } | null>(null)
   const [candidatePanel, setCandidatePanel] = useState<{ kind: 'hotel' | 'place'; idx: number } | null>(null)
   const [candidateList, setCandidateList] = useState<ResolvedPlace[]>([])
   const [candidateLoadingKey, setCandidateLoadingKey] = useState<string | null>(null)
@@ -146,6 +149,11 @@ function App() {
       .filter(Boolean)
 
   const normalizeReversePlaces = (len: number, raw?: boolean[]) => Array.from({ length: len }, (_, i) => raw?.[i] === true)
+  const normalizeTravelModes = (len: number, raw?: TravelMode[]) =>
+    Array.from({ length: len }, (_, i) => {
+      const mode = raw?.[i]
+      return mode === 'walking' || mode === 'cycling' ? mode : 'driving'
+    })
 
   const formatDistance = (meters: number) => {
     if (!Number.isFinite(meters)) return '-'
@@ -251,6 +259,7 @@ function App() {
       setCandidateLoadingKey(null)
     }
     setSelectedHotelIdx(idx)
+    if (idx !== selectedHotelIdx) setActiveRoute(null)
     if (!nextData) return
     mapRef.current?.setPoints({ hotels: nextData.hotels, places: nextData.places, selectedHotelIdx: idx })
   }
@@ -315,6 +324,7 @@ function App() {
       setData(nextData)
       setReversePlaces(normalizeReversePlaces(nextPlaces.length, resp.reversePlaces))
       mapRef.current?.setPoints({ hotels: nextHotels, places: nextPlaces, selectedHotelIdx })
+      setActiveRoute(null)
       setCandidatePanel(null)
       setCandidateList([])
     } catch (err) {
@@ -342,16 +352,20 @@ function App() {
       setData(resp)
       setExpandedPlaces(Array.from({ length: resp.places.length }, () => false))
       setReversePlaces(normalizeReversePlaces(resp.places.length, resp.reversePlaces ?? nextReversePlaces))
+      setTravelModes(normalizeTravelModes(resp.places.length))
       setCandidatePanel(null)
       setCandidateList([])
       setCandidateError(null)
       setCandidateLoadingKey(null)
+      setActiveRoute(null)
       selectHotel(0, resp)
     } catch (err) {
       setData(null)
       setSelectedHotelIdx(null)
       setExpandedPlaces([])
       setReversePlaces([])
+      setTravelModes([])
+      setActiveRoute(null)
       setError(toErrorMessage(err))
     } finally {
       setLoading(false)
@@ -386,7 +400,7 @@ function App() {
     }
   }
 
-  const onShowRoute = async (params: { mode: 'driving' | 'transit'; placeIdx: number; planIndex?: number }) => {
+  const onShowRoute = async (params: { mode: TravelMode | 'transit'; placeIdx: number; planIndex?: number }) => {
     if (!data || selectedHotelIdx === null) return
     const hotel = data.hotels[selectedHotelIdx]
     const place = data.places[params.placeIdx]
@@ -407,11 +421,36 @@ function App() {
         amapKey: runtimeAmapKey,
       })
       mapRef.current?.showRoute({ polylines: resp.polylines, segments: resp.segments })
+      setActiveRoute({
+        mode: params.mode,
+        placeIdx: params.placeIdx,
+        planIndex: params.planIndex,
+        hotelIdx: selectedHotelIdx,
+      })
     } catch (err) {
       setError(toErrorMessage(err))
     } finally {
       setRouteLoadingKey(null)
     }
+  }
+
+  const updateTravelMode = (placeIdx: number, mode: TravelMode) => {
+    setTravelModes((prev) => {
+      const next = normalizeTravelModes(data?.places.length ?? prev.length, prev)
+      next[placeIdx] = mode
+      return next
+    })
+    if (!activeRoute || selectedHotelIdx === null) return
+    if (activeRoute.placeIdx !== placeIdx || activeRoute.hotelIdx !== selectedHotelIdx) return
+    if (activeRoute.mode === mode || activeRoute.mode === 'transit') return
+    const comparison = comparisonMap.get(`${selectedHotelIdx}-${placeIdx}`)
+    const summary = mode === 'walking' ? comparison?.walking : mode === 'cycling' ? comparison?.cycling : comparison?.driving
+    if (!summary) {
+      mapRef.current?.clearRoute()
+      setActiveRoute(null)
+      return
+    }
+    void onShowRoute({ mode, placeIdx })
   }
 
   const selectedHotel = data && selectedHotelIdx !== null ? data.hotels[selectedHotelIdx] : null
@@ -546,7 +585,10 @@ function App() {
         <div className="tm-head">
           <div className="tm-head__row">
             <div className="tm-head__title">TravelMap</div>
-            <button className="tm-btn tm-btn--small tm-btn--ghost" type="button" onClick={openSettingsPanel}>
+            <button className="tm-btn tm-btn--small tm-btn--ghost tm-btn--icon" type="button" onClick={openSettingsPanel}>
+              <span className="tm-btn__icon" aria-hidden="true">
+                <SettingsIcon />
+              </span>
               设置
             </button>
           </div>
@@ -601,7 +643,13 @@ function App() {
               {loading ? '计算中…' : '开始对比'}
             </button>
             {data ? (
-              <button className="tm-btn tm-btn--ghost" onClick={() => mapRef.current?.clearRoute()}>
+              <button
+                className="tm-btn tm-btn--ghost"
+                onClick={() => {
+                  mapRef.current?.clearRoute()
+                  setActiveRoute(null)
+                }}
+              >
                 清除路线
               </button>
             ) : null}
@@ -678,7 +726,6 @@ function App() {
                 <div className="tm-destlist">
                   {data.places.map((p, placeIdx) => {
                     const c = comparisonMap.get(`${selectedHotelIdx}-${placeIdx}`)
-                    const drivingDisabled = routeLoadingKey === `driving-${selectedHotelIdx}-${placeIdx}-0` || !c?.driving
                     const reverse = reversePlaces[placeIdx] === true
                     const expanded = expandedPlaces[placeIdx] === true
                     const fastestTransit = (() => {
@@ -695,6 +742,13 @@ function App() {
                       }
                       return { plan: best, idx: bestIdx }
                     })()
+                    const activeMode = travelModes[placeIdx] ?? 'driving'
+                    const activeSummary =
+                      activeMode === 'walking' ? c?.walking : activeMode === 'cycling' ? c?.cycling : c?.driving
+                    const activeError =
+                      activeMode === 'walking' ? c?.errors?.walking : activeMode === 'cycling' ? c?.errors?.cycling : c?.errors?.driving
+                    const activeRouteKey = `${activeMode}-${selectedHotelIdx}-${placeIdx}-0`
+                    const activeModeDisabled = routeLoadingKey === activeRouteKey || !activeSummary
                     return (
                       <div key={`${p.input}-${placeIdx}`} className="tm-destcard">
                         <div className="tm-destcard__head">
@@ -731,27 +785,60 @@ function App() {
                           <div className="tm-block tm-block--car">
                             <div className="tm-block__top">
                               <div className="tm-block__title tm-block__title--car">
-                                <span className="tm-block__icon">
-                                  <CarIcon />
-                                </span>
-                                打车
+                                <div className="tm-mode-group" role="tablist" aria-label="出行方式">
+                                  <button
+                                    className={`tm-mode-btn ${activeMode === 'driving' ? 'is-active' : ''}`}
+                                    type="button"
+                                    onClick={() => updateTravelMode(placeIdx, 'driving')}
+                                    aria-pressed={activeMode === 'driving'}
+                                  >
+                                    <span className="tm-block__icon">
+                                      <CarIcon />
+                                    </span>
+                                    打车
+                                  </button>
+                                  <button
+                                    className={`tm-mode-btn ${activeMode === 'walking' ? 'is-active' : ''}`}
+                                    type="button"
+                                    onClick={() => updateTravelMode(placeIdx, 'walking')}
+                                    aria-pressed={activeMode === 'walking'}
+                                  >
+                                    <span className="tm-block__icon">
+                                      <WalkIcon />
+                                    </span>
+                                    步行
+                                  </button>
+                                  <button
+                                    className={`tm-mode-btn ${activeMode === 'cycling' ? 'is-active' : ''}`}
+                                    type="button"
+                                    onClick={() => updateTravelMode(placeIdx, 'cycling')}
+                                    aria-pressed={activeMode === 'cycling'}
+                                  >
+                                    <span className="tm-block__icon">
+                                      <BikeIcon />
+                                    </span>
+                                    骑车
+                                  </button>
+                                </div>
                               </div>
                               <button
                                 className="tm-btn tm-btn--small"
-                                onClick={() => onShowRoute({ mode: 'driving', placeIdx })}
-                                disabled={drivingDisabled}
+                                onClick={() => onShowRoute({ mode: activeMode, placeIdx })}
+                                disabled={activeModeDisabled}
                               >
-                                {routeLoadingKey === `driving-${selectedHotelIdx}-${placeIdx}-0` ? '加载中…' : '在地图上显示'}
+                                {routeLoadingKey === activeRouteKey ? '加载中…' : '在地图上显示'}
                               </button>
                             </div>
-                            {c?.driving ? (
+                            {activeSummary ? (
                               <div className="tm-kv">
-                                <span className="tm-pill tm-pill--blue">{formatDistance(c.driving.distanceMeters)}</span>
-                                <span className="tm-pill tm-pill--blue">{formatDuration(c.driving.durationSeconds)}</span>
-                                <span className="tm-pill tm-pill--blue">约 {formatYuan(c.driving.taxiCostYuan)}</span>
+                                <span className="tm-pill tm-pill--blue">{formatDistance(activeSummary.distanceMeters)}</span>
+                                <span className="tm-pill tm-pill--blue">{formatDuration(activeSummary.durationSeconds)}</span>
+                                {activeMode === 'driving' ? (
+                                  <span className="tm-pill tm-pill--blue">约 {formatYuan(c?.driving?.taxiCostYuan ?? null)}</span>
+                                ) : null}
                               </div>
                             ) : (
-                              <div className="tm-muted">{c?.errors?.driving || '暂无结果'}</div>
+                              <div className="tm-muted">{activeError || '暂无结果'}</div>
                             )}
                           </div>
 

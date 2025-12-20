@@ -218,12 +218,21 @@ export const MapView = forwardRef<MapViewHandle, { amapKey?: string }>(function 
       if (kind === 'driving') return '#2563eb'
       if (kind === 'taxi') return '#dc2626'
       if (kind === 'walking') return '#64748b'
+      if (kind === 'cycling') return '#0ea5e9'
       const key = label || kind
       return palette[hashToIndex(key)]
     }
 
+    const items: RouteSegment[] = segments?.length
+      ? segments
+      : polylines.map((p) => ({ kind: p.kind, label: p.label, path: p.path }))
+
+    const isPureWalking = items.length > 0 && items.every((seg) => seg.kind === 'walking')
+    const isPureCycling = items.length > 0 && items.every((seg) => seg.kind === 'cycling')
+
     const shouldShowLabel = (kind: RoutePolyline['kind'], zoom: number) => {
-      if (kind === 'walking') return zoom >= 14
+      if (kind === 'walking') return isPureWalking || zoom >= 14
+      if (kind === 'cycling') return isPureCycling || zoom >= 14
       return true
     }
 
@@ -232,13 +241,9 @@ export const MapView = forwardRef<MapViewHandle, { amapKey?: string }>(function 
       return path[Math.floor(path.length / 2)] || null
     }
 
-    const items: RouteSegment[] = segments?.length
-      ? segments
-      : polylines.map((p) => ({ kind: p.kind, label: p.label, path: p.path }))
-
     const overlays: unknown[] = []
     const stopKeySet = new Set<string>()
-    const labelMarkers: Array<{ marker: unknown; kind: RoutePolyline['kind'] }> = []
+    const labelMarkers: Array<{ marker: unknown; kind: RoutePolyline['kind']; alwaysShow: boolean }> = []
     const zoom = map.getZoom?.() ?? 0
 
     const escapeHtml = (value: string) =>
@@ -269,6 +274,8 @@ export const MapView = forwardRef<MapViewHandle, { amapKey?: string }>(function 
             return { strokeColor: color, strokeWeight: 6, strokeOpacity: 0.92, strokeStyle: 'dashed' }
           case 'walking':
             return { strokeColor: color, strokeWeight: 5, strokeOpacity: 0.85, strokeStyle: 'dashed' }
+          case 'cycling':
+            return { strokeColor: color, strokeWeight: 6, strokeOpacity: 0.9, strokeStyle: 'dashed' }
           case 'bus':
           case 'subway':
           case 'railway':
@@ -289,6 +296,8 @@ export const MapView = forwardRef<MapViewHandle, { amapKey?: string }>(function 
           ? '驾车'
           : seg.kind === 'walking'
             ? '步行'
+            : seg.kind === 'cycling'
+              ? '骑车'
             : seg.kind === 'taxi'
               ? '打车'
               : seg.kind === 'subway'
@@ -306,7 +315,8 @@ export const MapView = forwardRef<MapViewHandle, { amapKey?: string }>(function 
         })
         const markerApi = marker as unknown as AMapMarkerLike
         if (!shouldShowLabel(seg.kind, zoom)) markerApi?.hide?.()
-        labelMarkers.push({ marker, kind: seg.kind })
+        const alwaysShow = (seg.kind === 'walking' && isPureWalking) || (seg.kind === 'cycling' && isPureCycling)
+        labelMarkers.push({ marker, kind: seg.kind, alwaysShow })
         overlays.push(marker)
       }
 
@@ -368,7 +378,7 @@ export const MapView = forwardRef<MapViewHandle, { amapKey?: string }>(function 
           const z = map?.getZoom?.() ?? 0
           for (const item of routeLabelMarkersRef.current) {
             const markerApi = item.marker as unknown as AMapMarkerLike
-            const show = item.kind === 'walking' ? z >= 14 : true
+            const show = item.alwaysShow ? true : item.kind === 'walking' || item.kind === 'cycling' ? z >= 14 : true
             if (show) markerApi?.show?.()
             else markerApi?.hide?.()
           }

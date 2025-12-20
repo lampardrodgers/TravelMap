@@ -222,6 +222,23 @@
   cursor: pointer;
 }
 
+.tm-btn--icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tm-btn__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tm-btn__icon svg {
+  width: 12px;
+  height: 12px;
+}
+
 .tm-btn:hover:not(:disabled) {
   border-color: rgba(96, 165, 250, 0.35);
   background: rgba(255, 255, 255, 0.08);
@@ -501,6 +518,11 @@
   gap: 8px;
 }
 
+.tm-block__title--car {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
 .tm-block__icon {
   width: 26px;
   height: 26px;
@@ -515,6 +537,49 @@
   color: var(--tm-blue);
   border-color: rgba(96, 165, 250, 0.35);
   background: rgba(37, 99, 235, 0.12);
+}
+
+.tm-mode-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tm-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(2, 6, 23, 0.55);
+  color: rgba(229, 231, 235, 0.86);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tm-mode-btn .tm-block__icon {
+  width: 18px;
+  height: 18px;
+}
+
+.tm-mode-btn .tm-block__icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.tm-mode-btn.is-active {
+  border-color: rgba(96, 165, 250, 0.5);
+  background: rgba(37, 99, 235, 0.16);
+  color: rgba(229, 231, 235, 0.98);
+  box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.35);
+}
+
+.tm-mode-btn:focus-visible {
+  outline: 2px solid rgba(96, 165, 250, 0.5);
+  outline-offset: 2px;
 }
 
 .tm-block__title--transit .tm-block__icon {

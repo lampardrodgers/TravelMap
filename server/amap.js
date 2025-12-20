@@ -1,6 +1,7 @@
 import { createRateLimiter, parseLngLatText, parseNumber, sleep } from './utils.js'
 
 const AMAP_API_BASE = 'https://restapi.amap.com/v3'
+const AMAP_API_BASE_V4 = 'https://restapi.amap.com/v4'
 const AMAP_CONCURRENCY = Number(process.env.AMAP_CONCURRENCY || 2)
 const AMAP_QPS = Number(process.env.AMAP_QPS || 3)
 const AMAP_MAX_RETRIES = Number(process.env.AMAP_MAX_RETRIES || 3)
@@ -22,8 +23,8 @@ function requireAmapKey(override) {
   return key
 }
 
-function buildUrl(pathname, params) {
-  const url = new URL(`${AMAP_API_BASE}/${pathname}`)
+function buildUrl(base, pathname, params) {
+  const url = new URL(`${base}/${pathname}`)
   for (const [key, value] of Object.entries(params)) {
     if (value === undefined || value === null) continue
     url.searchParams.set(key, String(value))
@@ -31,8 +32,18 @@ function buildUrl(pathname, params) {
   return url
 }
 
-async function amapGetJson(pathname, params, amapKey) {
-  const url = buildUrl(pathname, { ...params, key: requireAmapKey(amapKey) })
+async function amapGetJson(pathname, params, amapKey, options = {}) {
+  const {
+    base = AMAP_API_BASE,
+    isOk = (json) => json?.status === '1',
+    getErrorInfo = (json) => ({
+      info: String(json?.info || 'UNKNOWN'),
+      code: String(json?.infocode || 'N/A'),
+    }),
+    isQpsExceeded = (info, code) => code === '10021' || info === 'CUQPS_HAS_EXCEEDED_THE_LIMIT',
+  } = options
+
+  const url = buildUrl(base, pathname, { ...params, key: requireAmapKey(amapKey) })
   const maxRetries = Number.isFinite(AMAP_MAX_RETRIES) ? Math.max(0, Math.min(AMAP_MAX_RETRIES, 8)) : 3
 
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
@@ -44,21 +55,29 @@ async function amapGetJson(pathname, params, amapKey) {
       return /** @type {any} */ (await resp.json())
     })
 
-    if (json?.status === '1') return json
+    if (isOk(json)) return json
 
-    const info = String(json?.info || 'UNKNOWN')
-    const infocode = String(json?.infocode || 'N/A')
-    const isQpsExceeded = infocode === '10021' || info === 'CUQPS_HAS_EXCEEDED_THE_LIMIT'
-    if (isQpsExceeded && attempt < maxRetries) {
+    const { info, code } = getErrorInfo(json)
+    const qpsExceeded = isQpsExceeded(info, code)
+    if (qpsExceeded && attempt < maxRetries) {
       const backoffMs = 350 * Math.pow(2, attempt) + Math.floor(Math.random() * 120)
       await sleep(backoffMs)
       continue
     }
 
-    throw new Error(`高德返回错误：${info} (${infocode})`)
+    throw new Error(`高德返回错误：${info} (${code})`)
   }
 
   throw new Error('高德请求失败：重试次数已用尽')
+}
+
+function getBicyclingPaths(json) {
+  const dataPaths = Array.isArray(json?.data?.paths) ? json.data.paths : []
+  if (dataPaths.length) return dataPaths
+  const routePaths = Array.isArray(json?.route?.paths) ? json.route.paths : []
+  if (routePaths.length) return routePaths
+  const rawPaths = Array.isArray(json?.paths) ? json.paths : []
+  return rawPaths
 }
 
 function parseLocation(locationText) {
@@ -252,6 +271,49 @@ export async function getDrivingSummary({ origin, destination, amapKey }) {
   }
 }
 
+export async function getWalkingSummary({ origin, destination, amapKey }) {
+  const json = await amapGetJson('direction/walking', {
+    origin: lngLatToText(origin),
+    destination: lngLatToText(destination),
+  }, amapKey)
+
+  const route = json?.route
+  const firstPath = route?.paths?.[0]
+  if (!firstPath) throw new Error('步行规划无结果')
+
+  return {
+    distanceMeters: parseNumber(firstPath.distance) ?? 0,
+    durationSeconds: parseNumber(firstPath.duration) ?? 0,
+  }
+}
+
+export async function getCyclingSummary({ origin, destination, amapKey }) {
+  const json = await amapGetJson(
+    'direction/bicycling',
+    {
+      origin: lngLatToText(origin),
+      destination: lngLatToText(destination),
+    },
+    amapKey,
+    {
+      base: AMAP_API_BASE_V4,
+      isOk: (data) => data?.status === '1' || Number(data?.errcode ?? 0) === 0,
+      getErrorInfo: (data) => ({
+        info: String(data?.errmsg || data?.info || 'UNKNOWN'),
+        code: String(data?.errcode ?? data?.infocode ?? 'N/A'),
+      }),
+    },
+  )
+
+  const firstPath = getBicyclingPaths(json)[0]
+  if (!firstPath) throw new Error('骑车规划无结果')
+
+  return {
+    distanceMeters: parseNumber(firstPath.distance) ?? 0,
+    durationSeconds: parseNumber(firstPath.duration) ?? 0,
+  }
+}
+
 function summarizeTransitSegment(segment) {
   /** @type {string[]} */
   const parts = []
@@ -362,6 +424,60 @@ export async function getDrivingRoutePolylines({ origin, destination, amapKey })
       {
         kind: 'driving',
         path: paths,
+      },
+    ],
+  }
+}
+
+export async function getWalkingRoutePolylines({ origin, destination, amapKey }) {
+  const json = await amapGetJson('direction/walking', {
+    origin: lngLatToText(origin),
+    destination: lngLatToText(destination),
+  }, amapKey)
+
+  const route = json?.route
+  const firstPath = route?.paths?.[0]
+  const steps = Array.isArray(firstPath?.steps) ? firstPath.steps : []
+  const paths = steps.flatMap((s) => polylineTextToPath(s?.polyline))
+  return {
+    polylines: [
+      {
+        kind: 'walking',
+        path: paths,
+        label: '步行',
+      },
+    ],
+  }
+}
+
+export async function getCyclingRoutePolylines({ origin, destination, amapKey }) {
+  const json = await amapGetJson(
+    'direction/bicycling',
+    {
+      origin: lngLatToText(origin),
+      destination: lngLatToText(destination),
+    },
+    amapKey,
+    {
+      base: AMAP_API_BASE_V4,
+      isOk: (data) => data?.status === '1' || Number(data?.errcode ?? 0) === 0,
+      getErrorInfo: (data) => ({
+        info: String(data?.errmsg || data?.info || 'UNKNOWN'),
+        code: String(data?.errcode ?? data?.infocode ?? 'N/A'),
+      }),
+    },
+  )
+
+  const firstPath = getBicyclingPaths(json)[0]
+  if (!firstPath) throw new Error('骑车规划无结果')
+  const steps = Array.isArray(firstPath?.steps) ? firstPath.steps : []
+  const paths = steps.flatMap((s) => polylineTextToPath(s?.polyline))
+  return {
+    polylines: [
+      {
+        kind: 'cycling',
+        path: paths,
+        label: '骑车',
       },
     ],
   }

@@ -18,6 +18,11 @@ export type DrivingSummary = {
   tollDistanceMeters: number | null
 }
 
+export type LightSummary = {
+  distanceMeters: number
+  durationSeconds: number
+}
+
 export type TransitPlanSummary = {
   durationSeconds: number
   costYuan: number | null
@@ -35,8 +40,10 @@ export type Comparison = {
   hotelIdx: number
   placeIdx: number
   driving: DrivingSummary | null
+  walking?: LightSummary | null
+  cycling?: LightSummary | null
   transit: TransitSummary | null
-  errors: { driving?: string; transit?: string } | null
+  errors: { driving?: string; walking?: string; cycling?: string; transit?: string } | null
 }
 
 export type CompareResponse = {
@@ -56,13 +63,13 @@ export type CandidatesResponse = {
 }
 
 export type RoutePolyline = {
-  kind: 'driving' | 'walking' | 'bus' | 'subway' | 'railway' | 'taxi'
+  kind: 'driving' | 'walking' | 'cycling' | 'bus' | 'subway' | 'railway' | 'taxi'
   path: Array<[number, number]>
   label?: string
 }
 
 export type RouteResponse = {
-  mode: 'driving' | 'transit'
+  mode: 'driving' | 'transit' | 'walking' | 'cycling'
   polylines: RoutePolyline[]
   segments?: Array<{
     kind: RoutePolyline['kind']
@@ -145,7 +152,7 @@ export async function fetchCandidates(payload: {
 }
 
 export async function fetchRoute(payload: {
-  mode: 'driving' | 'transit'
+  mode: 'driving' | 'transit' | 'walking' | 'cycling'
   origin: LngLat
   destination: LngLat
   city?: string
