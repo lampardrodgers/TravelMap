@@ -162,6 +162,73 @@ export async function resolvePlace({ text, city, cityLimit }) {
   throw new Error(`未找到地点：${text}`)
 }
 
+function buildPoiCandidates({ text, pois }) {
+  const seen = new Set()
+  const candidates = []
+  for (const poi of pois) {
+    const poiLocationText = poi?.entr_location || poi?.location
+    if (!poiLocationText) continue
+    const location = parseLocation(poiLocationText)
+    if (!location) continue
+    const key = `${location.lng.toFixed(6)},${location.lat.toFixed(6)}-${poi?.name || ''}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    candidates.push({
+      input: text,
+      name: poi?.name || text,
+      address: poi?.address || null,
+      location,
+      citycode: poi?.citycode || null,
+      adcode: poi?.adcode || null,
+      source: 'poi',
+    })
+  }
+  return candidates
+}
+
+export async function searchPlaceCandidates({ text, city, cityLimit, limit }) {
+  const coord = parseLngLatText(text)
+  if (coord) return []
+
+  const capped = Math.max(1, Math.min(Number(limit ?? 8), 20))
+  const poiJson = await amapGetJson('place/text', {
+    keywords: text,
+    extensions: 'all',
+    offset: capped,
+    page: 1,
+    city: city || undefined,
+    citylimit: cityLimit && city ? 'true' : undefined,
+  })
+
+  /** @type {any[]} */
+  const pois = poiJson?.pois || []
+  const candidates = buildPoiCandidates({ text, pois })
+  if (candidates.length) return candidates
+
+  const geoJson = await amapGetJson('geocode/geo', {
+    address: text,
+    city: city || undefined,
+  })
+  /** @type {any[]} */
+  const geocodes = geoJson?.geocodes || []
+  const geoCandidates = []
+  for (const geo of geocodes.slice(0, capped)) {
+    if (!geo?.location) continue
+    const location = parseLocation(geo.location)
+    if (!location) continue
+    geoCandidates.push({
+      input: text,
+      name: geo.formatted_address || text,
+      address: geo.formatted_address || null,
+      location,
+      citycode: geo?.citycode || null,
+      adcode: geo?.adcode || null,
+      source: 'geocode',
+    })
+  }
+  return geoCandidates
+}
+
 export async function getDrivingSummary({ origin, destination }) {
   const json = await amapGetJson('direction/driving', {
     origin: lngLatToText(origin),

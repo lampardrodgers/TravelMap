@@ -51,6 +51,10 @@ export type RecompareResponse = {
   comparisons: Comparison[]
 }
 
+export type CandidatesResponse = {
+  candidates: ResolvedPlace[]
+}
+
 export type RoutePolyline = {
   kind: 'driving' | 'walking' | 'bus' | 'subway' | 'railway' | 'taxi'
   path: Array<[number, number]>
@@ -113,6 +117,7 @@ export async function recompareResolved(payload: {
   transitStrategy?: number
   maxTransitPlans?: number
   onlyPlaceIdx?: number | null
+  onlyHotelIdx?: number | null
 }): Promise<RecompareResponse> {
   const resp = await fetch('/api/recompare', {
     method: 'POST',
@@ -120,6 +125,20 @@ export async function recompareResolved(payload: {
     body: JSON.stringify(payload),
   })
   return (await parseJsonOrThrow(resp)) as RecompareResponse
+}
+
+export async function fetchCandidates(payload: {
+  text: string
+  city?: string
+  cityLimit?: boolean
+  limit?: number
+}): Promise<CandidatesResponse> {
+  const resp = await fetch('/api/candidates', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return (await parseJsonOrThrow(resp)) as CandidatesResponse
 }
 
 export async function fetchRoute(payload: {

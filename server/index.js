@@ -9,6 +9,7 @@ import {
   getTransitRoutePolylines,
   getTransitSummary,
   resolvePlace,
+  searchPlaceCandidates,
 } from './amap.js'
 import { createConcurrencyLimiter, isNonEmptyString } from './utils.js'
 
@@ -55,6 +56,7 @@ async function computeComparisons({
   maxTransitPlans,
   transitStrategy,
   onlyPlaceIdx = null,
+  onlyHotelIdx = null,
 }) {
   const limit = createConcurrencyLimiter(5)
   const comparisons = []
@@ -66,13 +68,24 @@ async function computeComparisons({
         ? [onlyPlaceIdx]
         : []
 
+  const hotelIndices =
+    onlyHotelIdx === null
+      ? resolvedHotels.map((_h, idx) => idx)
+      : Number.isInteger(onlyHotelIdx) && onlyHotelIdx >= 0 && onlyHotelIdx < resolvedHotels.length
+        ? [onlyHotelIdx]
+        : []
+
   if (onlyPlaceIdx !== null && placeIndices.length === 0) {
     throw new Error('onlyPlaceIdx 非法')
   }
+  if (onlyHotelIdx !== null && hotelIndices.length === 0) {
+    throw new Error('onlyHotelIdx 非法')
+  }
 
   await Promise.all(
-    resolvedHotels.flatMap((hotel, hotelIdx) =>
+    hotelIndices.flatMap((hotelIdx) =>
       placeIndices.map(async (placeIdx) => {
+        const hotel = resolvedHotels[hotelIdx]
         const place = resolvedPlaces[placeIdx]
         const reverse = reversePlaces[placeIdx] === true
         const origin = reverse ? place.location : hotel.location
@@ -181,6 +194,23 @@ app.post('/api/compare', async (req, res) => {
   }
 })
 
+app.post('/api/candidates', async (req, res) => {
+  try {
+    const body = req.body ?? {}
+    const text = isNonEmptyString(body.text) ? body.text.trim() : ''
+    const city = isNonEmptyString(body.city) ? body.city.trim() : null
+    const cityLimit = body.cityLimit !== false
+    const limit = body.limit ?? 8
+
+    if (!text) return res.status(400).json({ error: 'text 不能为空' })
+
+    const candidates = await searchPlaceCandidates({ text, city, cityLimit, limit })
+    return res.json({ candidates })
+  } catch (err) {
+    return res.status(500).json({ error: String(err?.message || err) })
+  }
+})
+
 app.post('/api/recompare', async (req, res) => {
   try {
     const body = req.body ?? {}
@@ -191,13 +221,14 @@ app.post('/api/recompare', async (req, res) => {
     const maxTransitPlans = body.maxTransitPlans ?? 3
     const transitStrategy = body.transitStrategy ?? 0
     const onlyPlaceIdx = body.onlyPlaceIdx ?? null
+    const onlyHotelIdx = body.onlyHotelIdx ?? null
 
     if (hotels.length === 0) return res.status(400).json({ error: 'hotels 不能为空' })
     if (places.length === 0) return res.status(400).json({ error: 'places 不能为空' })
     if (hotels.length > MAX_ITEMS || places.length > MAX_ITEMS) {
       return res.status(400).json({ error: `酒店/地点最多各 ${MAX_ITEMS} 条（避免超额与等待过久）` })
     }
-    if (onlyPlaceIdx === null && hotels.length * places.length > MAX_PAIRS) {
+    if (onlyPlaceIdx === null && onlyHotelIdx === null && hotels.length * places.length > MAX_PAIRS) {
       return res.status(400).json({ error: `组合过多：最多 ${MAX_PAIRS} 组（当前 ${hotels.length * places.length} 组）` })
     }
 
@@ -209,6 +240,7 @@ app.post('/api/recompare', async (req, res) => {
       maxTransitPlans,
       transitStrategy,
       onlyPlaceIdx,
+      onlyHotelIdx,
     })
 
     return res.json({

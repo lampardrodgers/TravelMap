@@ -1,6 +1,6 @@
 import './App.css'
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
-import { comparePlaces, fetchRoute, recompareResolved, type CompareResponse, type Comparison } from './api'
+import { comparePlaces, fetchCandidates, fetchRoute, recompareResolved, type CompareResponse, type Comparison, type ResolvedPlace } from './api'
 import { MapView, type MapViewHandle } from './components/MapView'
 import { BusIcon, CarIcon, ClockIcon, CoinIcon, PinIcon, SubwayIcon, WalkIcon } from './components/Icons'
 
@@ -23,7 +23,13 @@ function App() {
   const [reversePlaces, setReversePlaces] = useState<boolean[]>([])
   const [reverseLoadingIdx, setReverseLoadingIdx] = useState<number | null>(null)
   const [routeLoadingKey, setRouteLoadingKey] = useState<string | null>(null)
+  const [candidatePanel, setCandidatePanel] = useState<{ kind: 'hotel' | 'place'; idx: number } | null>(null)
+  const [candidateList, setCandidateList] = useState<ResolvedPlace[]>([])
+  const [candidateLoadingKey, setCandidateLoadingKey] = useState<string | null>(null)
+  const [candidateApplyingKey, setCandidateApplyingKey] = useState<string | null>(null)
+  const [candidateError, setCandidateError] = useState<string | null>(null)
   const mapRef = useRef<MapViewHandle | null>(null)
+  const candidateRequestRef = useRef<string | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(520)
   const splitterDragRef = useRef<{ active: boolean; startX: number; startWidth: number; pointerId: number | null }>({
     active: false,
@@ -127,6 +133,24 @@ function App() {
     return `¥${value.toFixed(1).replace(/\\.0$/, '')}`
   }
 
+  const isSameLocation = (a: { lng: number; lat: number }, b: { lng: number; lat: number }) =>
+    Math.abs(a.lng - b.lng) < 1e-6 && Math.abs(a.lat - b.lat) < 1e-6
+
+  const mergeComparisons = (base: Comparison[], updates: Comparison[]) => {
+    const idxMap = new Map<string, number>()
+    base.forEach((c, i) => idxMap.set(`${c.hotelIdx}-${c.placeIdx}`, i))
+    const merged = base.slice()
+    for (const c of updates) {
+      const key = `${c.hotelIdx}-${c.placeIdx}`
+      const i = idxMap.get(key)
+      if (i === undefined) merged.push(c)
+      else merged[i] = c
+    }
+    return merged
+  }
+
+  const candidateKey = (kind: 'hotel' | 'place', idx: number) => `${kind}-${idx}`
+
   const selectHotel = (idx: number | null, nextData: CompareResponse | null = data) => {
     if (idx !== selectedHotelIdx && nextData) {
       setExpandedPlaces(Array.from({ length: nextData.places.length }, () => false))
@@ -134,6 +158,73 @@ function App() {
     setSelectedHotelIdx(idx)
     if (!nextData) return
     mapRef.current?.setPoints({ hotels: nextData.hotels, places: nextData.places, selectedHotelIdx: idx })
+  }
+
+  const openCandidatePanel = async (kind: 'hotel' | 'place', idx: number) => {
+    if (!data) return
+    const key = candidateKey(kind, idx)
+    candidateRequestRef.current = key
+    setCandidatePanel({ kind, idx })
+    setCandidateList([])
+    setCandidateError(null)
+    setCandidateLoadingKey(key)
+    try {
+      const item = kind === 'hotel' ? data.hotels[idx] : data.places[idx]
+      const resp = await fetchCandidates({
+        text: item.input,
+        city: city.trim() || undefined,
+        cityLimit,
+        limit: 8,
+      })
+      if (candidateRequestRef.current !== key) return
+      const list = Array.isArray(resp.candidates) ? resp.candidates : []
+      setCandidateList(list)
+      if (!list.length) setCandidateError('未找到可替换的结果')
+    } catch (err) {
+      if (candidateRequestRef.current !== key) return
+      setCandidateError(toErrorMessage(err))
+    } finally {
+      if (candidateRequestRef.current === key) setCandidateLoadingKey(null)
+    }
+  }
+
+  const applyCandidate = async (kind: 'hotel' | 'place', idx: number, candidate: ResolvedPlace) => {
+    if (!data) return
+    const key = candidateKey(kind, idx)
+    const nextHotels = data.hotels.slice()
+    const nextPlaces = data.places.slice()
+    if (kind === 'hotel') nextHotels[idx] = candidate
+    else nextPlaces[idx] = candidate
+
+    setCandidateApplyingKey(key)
+    setError(null)
+    try {
+      const resp = await recompareResolved({
+        city: city.trim() || undefined,
+        hotels: nextHotels,
+        places: nextPlaces,
+        reversePlaces,
+        onlyPlaceIdx: kind === 'place' ? idx : null,
+        onlyHotelIdx: kind === 'hotel' ? idx : null,
+      })
+
+      const nextData = {
+        ...data,
+        hotels: nextHotels,
+        places: nextPlaces,
+        comparisons: mergeComparisons(data.comparisons, resp.comparisons),
+        reversePlaces: resp.reversePlaces,
+      }
+      setData(nextData)
+      setReversePlaces(normalizeReversePlaces(nextPlaces.length, resp.reversePlaces))
+      mapRef.current?.setPoints({ hotels: nextHotels, places: nextPlaces, selectedHotelIdx })
+      setCandidatePanel(null)
+      setCandidateList([])
+    } catch (err) {
+      setError(toErrorMessage(err))
+    } finally {
+      setCandidateApplyingKey(null)
+    }
   }
 
   const onCompare = async () => {
@@ -153,6 +244,10 @@ function App() {
       setData(resp)
       setExpandedPlaces(Array.from({ length: resp.places.length }, () => false))
       setReversePlaces(normalizeReversePlaces(resp.places.length, resp.reversePlaces ?? nextReversePlaces))
+      setCandidatePanel(null)
+      setCandidateList([])
+      setCandidateError(null)
+      setCandidateLoadingKey(null)
       selectHotel(0, resp)
     } catch (err) {
       setData(null)
@@ -182,15 +277,7 @@ function App() {
         onlyPlaceIdx: placeIdx,
       })
 
-      const idxMap = new Map<string, number>()
-      data.comparisons.forEach((c, i) => idxMap.set(`${c.hotelIdx}-${c.placeIdx}`, i))
-      const merged = data.comparisons.slice()
-      for (const c of resp.comparisons) {
-        const key = `${c.hotelIdx}-${c.placeIdx}`
-        const i = idxMap.get(key)
-        if (i === undefined) merged.push(c)
-        else merged[i] = c
-      }
+      const merged = mergeComparisons(data.comparisons, resp.comparisons)
       setData({ ...data, comparisons: merged, reversePlaces: resp.reversePlaces })
       setReversePlaces(normalizeReversePlaces(data.places.length, resp.reversePlaces))
     } catch (err) {
@@ -228,6 +315,66 @@ function App() {
   }
 
   const selectedHotel = data && selectedHotelIdx !== null ? data.hotels[selectedHotelIdx] : null
+
+  const renderCandidatePanel = (kind: 'hotel' | 'place', idx: number, current: ResolvedPlace) => {
+    if (!candidatePanel || candidatePanel.kind !== kind || candidatePanel.idx !== idx) return null
+    const key = candidateKey(kind, idx)
+    const loading = candidateLoadingKey === key
+    const applying = candidateApplyingKey === key
+    return (
+      <div className="tm-candidate">
+        <div className="tm-candidate__head">
+          <div className="tm-candidate__title">可选结果</div>
+          <div className="tm-candidate__tools">
+            <button
+              className="tm-btn tm-btn--small tm-btn--ghost"
+              type="button"
+              onClick={() => {
+                setCandidatePanel(null)
+                setCandidateList([])
+                setCandidateError(null)
+              }}
+            >
+              关闭
+            </button>
+          </div>
+        </div>
+        {loading ? (
+          <div className="tm-muted">加载中…</div>
+        ) : candidateError ? (
+          <div className="tm-error tm-error--inline">{candidateError}</div>
+        ) : candidateList.length ? (
+          <div className="tm-candidate__list">
+            {candidateList.map((c, i) => {
+              const selected = isSameLocation(c.location, current.location)
+              const disabled = applying || selected
+              return (
+                <button
+                  key={`${c.name}-${i}`}
+                  className={`tm-candidate__item ${selected ? 'tm-candidate__item--active' : ''}`}
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => {
+                    if (disabled) return
+                    applyCandidate(kind, idx, c)
+                  }}
+                >
+                  <div className="tm-candidate__name">
+                    <span>{c.name}</span>
+                    {selected ? <span className="tm-badge">已选</span> : null}
+                  </div>
+                  <div className="tm-candidate__addr">{c.address || c.input}</div>
+                </button>
+              )
+            })}
+          </div>
+        ) : (
+          <div className="tm-muted">暂无可选结果</div>
+        )}
+        {applying ? <div className="tm-muted">更新中…</div> : null}
+      </div>
+    )
+  }
 
   useEffect(() => {
     if (resizeRafRef.current) cancelAnimationFrame(resizeRafRef.current)
@@ -358,9 +505,23 @@ function App() {
 
             {selectedHotel ? (
               <div className="tm-selected">
-                <div className="tm-selected__title">当前酒店</div>
+                <div className="tm-selected__row">
+                  <div className="tm-selected__title">当前酒店</div>
+                  <button
+                    className="tm-btn tm-btn--small tm-btn--ghost"
+                    type="button"
+                    onClick={() => {
+                      if (selectedHotelIdx === null) return
+                      openCandidatePanel('hotel', selectedHotelIdx)
+                    }}
+                    disabled={loading}
+                  >
+                    匹配有误
+                  </button>
+                </div>
                 <div className="tm-selected__main">{selectedHotel.name}</div>
                 <div className="tm-selected__meta">{selectedHotel.address || selectedHotel.input}</div>
+                {selectedHotelIdx !== null ? renderCandidatePanel('hotel', selectedHotelIdx, selectedHotel) : null}
               </div>
             ) : null}
 
@@ -414,17 +575,28 @@ function App() {
                               <span className="tm-place-badge">{`P${placeIdx + 1}`}</span>
                               {p.name}
                             </div>
-                            <button
-                              className="tm-dirbtn"
-                              type="button"
-                              onClick={() => togglePlaceDirection(placeIdx)}
-                              disabled={reverseLoadingIdx === placeIdx || loading}
-                              title="切换：酒店→目的地 / 目的地→酒店"
-                            >
-                              {reverseLoadingIdx === placeIdx ? '更新中…' : reverse ? '目的地 → 酒店' : '酒店 → 目的地'}
-                            </button>
+                            <div className="tm-destcard__actions">
+                              <button
+                                className="tm-btn tm-btn--small tm-btn--ghost"
+                                type="button"
+                                onClick={() => openCandidatePanel('place', placeIdx)}
+                                disabled={loading}
+                              >
+                                匹配有误
+                              </button>
+                              <button
+                                className="tm-dirbtn"
+                                type="button"
+                                onClick={() => togglePlaceDirection(placeIdx)}
+                                disabled={reverseLoadingIdx === placeIdx || loading}
+                                title="切换：酒店→目的地 / 目的地→酒店"
+                              >
+                                {reverseLoadingIdx === placeIdx ? '更新中…' : reverse ? '目的地 → 酒店' : '酒店 → 目的地'}
+                              </button>
+                            </div>
                           </div>
                           <div className="tm-destcard__addr">{p.address || p.input}</div>
+                          {renderCandidatePanel('place', placeIdx, p)}
                         </div>
 
                         <div className="tm-destcard__body">
