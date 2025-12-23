@@ -438,10 +438,19 @@ export async function getDrivingRoutePolylines({ origin, destination, amapKey })
 
   const route = json?.route
   const firstPath = route?.paths?.[0]
+  const durationSeconds = parseNumber(firstPath?.duration)
   const steps = Array.isArray(firstPath?.steps) ? firstPath.steps : []
   const paths = steps.flatMap((s) => polylineTextToPath(s?.polyline))
   return {
     taxiCostYuan: parseNumber(route?.taxi_cost),
+    segments: [
+      {
+        kind: 'driving',
+        label: '打车',
+        path: paths,
+        durationSeconds: durationSeconds ?? undefined,
+      },
+    ],
     polylines: [
       {
         kind: 'driving',
@@ -459,9 +468,18 @@ export async function getWalkingRoutePolylines({ origin, destination, amapKey })
 
   const route = json?.route
   const firstPath = route?.paths?.[0]
+  const durationSeconds = parseNumber(firstPath?.duration)
   const steps = Array.isArray(firstPath?.steps) ? firstPath.steps : []
   const paths = steps.flatMap((s) => polylineTextToPath(s?.polyline))
   return {
+    segments: [
+      {
+        kind: 'walking',
+        label: '步行',
+        path: paths,
+        durationSeconds: durationSeconds ?? undefined,
+      },
+    ],
     polylines: [
       {
         kind: 'walking',
@@ -492,9 +510,18 @@ export async function getCyclingRoutePolylines({ origin, destination, amapKey })
 
   const firstPath = getBicyclingPaths(json)[0]
   if (!firstPath) throw new Error('骑车规划无结果')
+  const durationSeconds = parseNumber(firstPath?.duration)
   const steps = Array.isArray(firstPath?.steps) ? firstPath.steps : []
   const paths = steps.flatMap((s) => polylineTextToPath(s?.polyline))
   return {
+    segments: [
+      {
+        kind: 'cycling',
+        label: '骑车',
+        path: paths,
+        durationSeconds: durationSeconds ?? undefined,
+      },
+    ],
     polylines: [
       {
         kind: 'cycling',

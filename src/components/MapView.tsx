@@ -7,6 +7,8 @@ export type MapViewHandle = {
   setCandidates: (params: { candidates: ResolvedPlace[] }) => void
   clearCandidates: () => void
   highlightCandidate: (index: number | null) => void
+  highlightHotel: (index: number | null) => void
+  highlightPlace: (index: number | null) => void
   showRoute: (params: { polylines: RoutePolyline[]; segments?: RouteSegment[] }) => void
   clearRoute: () => void
   resize: () => void
@@ -51,8 +53,12 @@ type AMapOverlayLike = {
   off?: (event: string, handler: () => void) => void
 }
 
-function createMarkerHtml(label: string, variant: 'hotel' | 'place' | 'selected' | 'candidate' | 'candidate-active') {
-  const cls =
+function createMarkerHtml(
+  label: string,
+  variant: 'hotel' | 'place' | 'selected' | 'candidate' | 'candidate-active',
+  highlightKind?: 'hotel' | 'place',
+) {
+  const base =
     variant === 'selected'
       ? 'tm-marker tm-marker--selected'
       : variant === 'hotel'
@@ -62,7 +68,9 @@ function createMarkerHtml(label: string, variant: 'hotel' | 'place' | 'selected'
           : variant === 'candidate-active'
             ? 'tm-marker tm-marker--candidate tm-marker--candidate-active'
             : 'tm-marker tm-marker--place'
-  return `<div class="${cls}">${label}</div>`
+  const highlight =
+    highlightKind === 'hotel' ? ' tm-marker--hover-hotel' : highlightKind === 'place' ? ' tm-marker--hover-place' : ''
+  return `<div class="${base}${highlight}">${label}</div>`
 }
 
 function normalizeCenter(points: ResolvedPlace[]): LngLat | null {
@@ -87,12 +95,19 @@ export const MapView = forwardRef<
     onSelectHotel?: (index: number) => void
     onSelectPlace?: (index: number) => void
     onSelectCandidate?: (index: number) => void
+    onHoverHotel?: (index: number | null) => void
+    onHoverPlace?: (index: number | null) => void
   }
->(function MapView({ amapKey: amapKeyOverride, onSelectHotel, onSelectPlace, onSelectCandidate }, ref) {
+>(function MapView({ amapKey: amapKeyOverride, onSelectHotel, onSelectPlace, onSelectCandidate, onHoverHotel, onHoverPlace }, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<AMapMap | null>(null)
   const amapRef = useRef<AMapNamespace | null>(null)
   const markerOverlaysRef = useRef<unknown[]>([])
+  const hotelMarkersRef = useRef<Array<{ marker: unknown; label: string }>>([])
+  const placeMarkersRef = useRef<Array<{ marker: unknown; label: string }>>([])
+  const hoveredHotelIdxRef = useRef<number | null>(null)
+  const hoveredPlaceIdxRef = useRef<number | null>(null)
+  const selectedHotelIdxRef = useRef<number | null>(null)
   const candidateOverlaysRef = useRef<unknown[]>([])
   const candidateMarkersRef = useRef<Array<{ marker: unknown; label: string }>>([])
   const routeOverlaysRef = useRef<unknown[]>([])
@@ -107,7 +122,7 @@ export const MapView = forwardRef<
       durationSeconds?: number
     }>
   >([])
-  const activeSegmentRef = useRef<number | null>(null)
+  const activeSegmentsRef = useRef<Set<number>>(new Set())
   const pendingPointsRef = useRef<{ hotels: ResolvedPlace[]; places: ResolvedPlace[]; selectedHotelIdx: number | null } | null>(null)
   const pendingRouteRef = useRef<{ polylines: RoutePolyline[]; segments?: RouteSegment[] } | null>(null)
   const pendingCandidatesRef = useRef<{ candidates: ResolvedPlace[] } | null>(null)
@@ -118,6 +133,8 @@ export const MapView = forwardRef<
   const onSelectHotelRef = useRef<typeof onSelectHotel>(onSelectHotel)
   const onSelectPlaceRef = useRef<typeof onSelectPlace>(onSelectPlace)
   const onSelectCandidateRef = useRef<typeof onSelectCandidate>(onSelectCandidate)
+  const onHoverHotelRef = useRef<typeof onHoverHotel>(onHoverHotel)
+  const onHoverPlaceRef = useRef<typeof onHoverPlace>(onHoverPlace)
   const envAmapKey = import.meta.env.VITE_AMAP_KEY as string | undefined
   const amapKey = amapKeyOverride || envAmapKey
   const securityJsCode = import.meta.env.VITE_AMAP_SECURITY_CODE as string | undefined
@@ -131,13 +148,17 @@ export const MapView = forwardRef<
     onSelectHotelRef.current = onSelectHotel
     onSelectPlaceRef.current = onSelectPlace
     onSelectCandidateRef.current = onSelectCandidate
-  }, [onSelectHotel, onSelectPlace, onSelectCandidate])
+    onHoverHotelRef.current = onHoverHotel
+    onHoverPlaceRef.current = onHoverPlace
+  }, [onSelectHotel, onSelectPlace, onSelectCandidate, onHoverHotel, onHoverPlace])
 
   const clearMarkers = useCallback(() => {
     const map = mapRef.current
     if (!map) return
     markerOverlaysRef.current.forEach((o) => map.remove(o))
     markerOverlaysRef.current = []
+    hotelMarkersRef.current = []
+    placeMarkersRef.current = []
   }, [])
 
   const clearCandidates = useCallback(() => {
@@ -157,56 +178,124 @@ export const MapView = forwardRef<
     routeOverlaysRef.current.forEach((o) => map.remove(o))
     routeOverlaysRef.current = []
     routeLabelMarkersRef.current = []
-    activeSegmentRef.current = null
+    activeSegmentsRef.current = new Set()
     lastRouteRef.current = null
   }, [])
 
-  const setPoints = useCallback(({ hotels, places, selectedHotelIdx }: { hotels: ResolvedPlace[]; places: ResolvedPlace[]; selectedHotelIdx: number | null }) => {
-    lastPointsRef.current = { hotels, places, selectedHotelIdx }
-    const AMap = amapRef.current
-    const map = mapRef.current
-    if (!AMap || !map) {
-      pendingPointsRef.current = { hotels, places, selectedHotelIdx }
-      return
-    }
-
-    clearRoute()
-    clearCandidates()
-    clearMarkers()
-
-    const overlays: unknown[] = []
-    hotels.forEach((h, idx) => {
-      const variant: 'hotel' | 'selected' = selectedHotelIdx === idx ? 'selected' : 'hotel'
-      const marker = new AMap.Marker({
-        position: [h.location.lng, h.location.lat],
-        title: h.name,
-        content: createMarkerHtml(`H${idx + 1}`, variant),
-        offset: new AMap.Pixel(-12, -12),
-      })
-      const markerOverlay = marker as unknown as AMapOverlayLike
-      markerOverlay?.on?.('click', () => onSelectHotelRef.current?.(idx))
-      overlays.push(marker)
+  const updateHotelMarkers = useCallback(() => {
+    const hoveredIdx = hoveredHotelIdxRef.current
+    const selectedIdx = selectedHotelIdxRef.current
+    hotelMarkersRef.current.forEach((item, idx) => {
+      const markerApi = item.marker as unknown as AMapMarkerLike
+      const variant = selectedIdx === idx ? 'selected' : 'hotel'
+      const highlight = hoveredIdx === idx ? 'hotel' : undefined
+      markerApi?.setContent?.(createMarkerHtml(item.label, variant, highlight))
     })
+  }, [])
 
-    places.forEach((p, idx) => {
-      const marker = new AMap.Marker({
-        position: [p.location.lng, p.location.lat],
-        title: p.name,
-        content: createMarkerHtml(`P${idx + 1}`, 'place'),
-        offset: new AMap.Pixel(-12, -12),
-      })
-      const markerOverlay = marker as unknown as AMapOverlayLike
-      markerOverlay?.on?.('click', () => onSelectPlaceRef.current?.(idx))
-      overlays.push(marker)
+  const updatePlaceMarkers = useCallback(() => {
+    const hoveredIdx = hoveredPlaceIdxRef.current
+    placeMarkersRef.current.forEach((item, idx) => {
+      const markerApi = item.marker as unknown as AMapMarkerLike
+      const highlight = hoveredIdx === idx ? 'place' : undefined
+      markerApi?.setContent?.(createMarkerHtml(item.label, 'place', highlight))
     })
+  }, [])
 
-    overlays.forEach((o) => map.add(o))
-    markerOverlaysRef.current = overlays
+  const highlightHotel = useCallback(
+    (index: number | null) => {
+      hoveredHotelIdxRef.current = index
+      updateHotelMarkers()
+    },
+    [updateHotelMarkers],
+  )
 
-    const center = normalizeCenter(hotels) || normalizeCenter(places)
-    if (center) map.setCenter([center.lng, center.lat])
-    if (overlays.length > 0) map.setFitView(overlays)
-  }, [clearCandidates, clearMarkers, clearRoute])
+  const highlightPlace = useCallback(
+    (index: number | null) => {
+      hoveredPlaceIdxRef.current = index
+      updatePlaceMarkers()
+    },
+    [updatePlaceMarkers],
+  )
+
+  const setPoints = useCallback(
+    ({ hotels, places, selectedHotelIdx }: { hotels: ResolvedPlace[]; places: ResolvedPlace[]; selectedHotelIdx: number | null }) => {
+      lastPointsRef.current = { hotels, places, selectedHotelIdx }
+      const AMap = amapRef.current
+      const map = mapRef.current
+      if (!AMap || !map) {
+        pendingPointsRef.current = { hotels, places, selectedHotelIdx }
+        return
+      }
+
+      clearRoute()
+      clearCandidates()
+      clearMarkers()
+
+      selectedHotelIdxRef.current = selectedHotelIdx
+      const overlays: unknown[] = []
+      const hotelMarkers: Array<{ marker: unknown; label: string }> = []
+      const placeMarkers: Array<{ marker: unknown; label: string }> = []
+      hotels.forEach((h, idx) => {
+        const variant: 'hotel' | 'selected' = selectedHotelIdx === idx ? 'selected' : 'hotel'
+        const highlight = hoveredHotelIdxRef.current === idx ? 'hotel' : undefined
+        const marker = new AMap.Marker({
+          position: [h.location.lng, h.location.lat],
+          title: h.name,
+          content: createMarkerHtml(`H${idx + 1}`, variant, highlight),
+          offset: new AMap.Pixel(-12, -12),
+        })
+        const markerOverlay = marker as unknown as AMapOverlayLike
+        markerOverlay?.on?.('click', () => onSelectHotelRef.current?.(idx))
+        markerOverlay?.on?.('mouseover', () => {
+          hoveredHotelIdxRef.current = idx
+          updateHotelMarkers()
+          onHoverHotelRef.current?.(idx)
+        })
+        markerOverlay?.on?.('mouseout', () => {
+          hoveredHotelIdxRef.current = null
+          updateHotelMarkers()
+          onHoverHotelRef.current?.(null)
+        })
+        overlays.push(marker)
+        hotelMarkers.push({ marker, label: `H${idx + 1}` })
+      })
+
+      places.forEach((p, idx) => {
+        const highlight = hoveredPlaceIdxRef.current === idx ? 'place' : undefined
+        const marker = new AMap.Marker({
+          position: [p.location.lng, p.location.lat],
+          title: p.name,
+          content: createMarkerHtml(`P${idx + 1}`, 'place', highlight),
+          offset: new AMap.Pixel(-12, -12),
+        })
+        const markerOverlay = marker as unknown as AMapOverlayLike
+        markerOverlay?.on?.('click', () => onSelectPlaceRef.current?.(idx))
+        markerOverlay?.on?.('mouseover', () => {
+          hoveredPlaceIdxRef.current = idx
+          updatePlaceMarkers()
+          onHoverPlaceRef.current?.(idx)
+        })
+        markerOverlay?.on?.('mouseout', () => {
+          hoveredPlaceIdxRef.current = null
+          updatePlaceMarkers()
+          onHoverPlaceRef.current?.(null)
+        })
+        overlays.push(marker)
+        placeMarkers.push({ marker, label: `P${idx + 1}` })
+      })
+
+      overlays.forEach((o) => map.add(o))
+      markerOverlaysRef.current = overlays
+      hotelMarkersRef.current = hotelMarkers
+      placeMarkersRef.current = placeMarkers
+
+      const center = normalizeCenter(hotels) || normalizeCenter(places)
+      if (center) map.setCenter([center.lng, center.lat])
+      if (overlays.length > 0) map.setFitView(overlays)
+    },
+    [clearCandidates, clearMarkers, clearRoute, updateHotelMarkers, updatePlaceMarkers],
+  )
 
   const setCandidates = useCallback(({ candidates }: { candidates: ResolvedPlace[] }) => {
     lastCandidatesRef.current = { candidates }
@@ -330,15 +419,20 @@ export const MapView = forwardRef<
       return `<div class="tm-route-label tm-route-label--active" style="--c:${color}"><span class="tm-route-label__main">${safeLabel}</span><span class="tm-route-label__time">${escapeHtml(timeText)}</span></div>`
     }
 
-    const setSegmentFocus = (nextIndex: number | null) => {
-      activeSegmentRef.current = nextIndex
+    const updateSegmentLabels = () => {
       routeLabelMarkersRef.current.forEach((item) => {
         const markerApi = item.marker as unknown as AMapMarkerLike
-        const isActive = nextIndex !== null && item.segmentIndex === nextIndex
+        const isActive = activeSegmentsRef.current.has(item.segmentIndex)
         const timeText = isActive ? formatDurationLabel(item.durationSeconds) : null
         markerApi?.setContent?.(buildRouteLabelHtml(item.baseLabel, item.color, timeText))
       })
+    }
 
+    const toggleSegment = (nextIndex: number) => {
+      const activeSet = activeSegmentsRef.current
+      if (activeSet.has(nextIndex)) activeSet.delete(nextIndex)
+      else activeSet.add(nextIndex)
+      updateSegmentLabels()
       const handler = onZoomEndRef.current
       if (handler) handler()
     }
@@ -410,8 +504,7 @@ export const MapView = forwardRef<
         if (allowSegmentFocus) {
           const markerOverlay = marker as unknown as AMapOverlayLike
           markerOverlay?.on?.('click', () => {
-            const nextIndex = activeSegmentRef.current === segIndex ? null : segIndex
-            setSegmentFocus(nextIndex)
+            toggleSegment(segIndex)
           })
         }
       }
@@ -525,13 +618,15 @@ export const MapView = forwardRef<
       setCandidates,
       clearCandidates,
       highlightCandidate,
+      highlightHotel,
+      highlightPlace,
       showRoute,
       clearRoute,
       resize: () => {
         mapRef.current?.resize?.()
       },
     }),
-    [clearCandidates, clearRoute, highlightCandidate, setCandidates, setPoints, showRoute],
+    [clearCandidates, clearRoute, highlightCandidate, highlightHotel, highlightPlace, setCandidates, setPoints, showRoute],
   )
 
   return (

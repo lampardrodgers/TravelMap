@@ -93,6 +93,8 @@ function App() {
   const candidateRequestRef = useRef<string | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(520)
   const [focusPlaceIdx, setFocusPlaceIdx] = useState<number | null>(null)
+  const [hoveredHotelIdx, setHoveredHotelIdx] = useState<number | null>(null)
+  const [hoveredPlaceIdx, setHoveredPlaceIdx] = useState<number | null>(null)
   const focusPlaceTimeoutRef = useRef<number | null>(null)
   const splitterDragRef = useRef<{ active: boolean; startX: number; startWidth: number; pointerId: number | null }>({
     active: false,
@@ -396,6 +398,14 @@ function App() {
     if (!current) return
     if (isSameLocation(candidate.location, current.location)) return
     void applyCandidate(candidatePanel.kind, candidatePanel.idx, candidate)
+  }
+
+  const handleHotelMarkerHover = (idx: number | null) => {
+    setHoveredHotelIdx(idx)
+  }
+
+  const handlePlaceMarkerHover = (idx: number | null) => {
+    setHoveredPlaceIdx(idx)
   }
 
   const onCompare = async () => {
@@ -736,8 +746,16 @@ function App() {
                 {data.hotels.map((h, idx) => (
                   <button
                     key={`${h.input}-${idx}`}
-                    className={`tm-hotel ${selectedHotelIdx === idx ? 'tm-hotel--active' : ''}`}
+                    className={`tm-hotel ${selectedHotelIdx === idx ? 'tm-hotel--active' : ''} ${hoveredHotelIdx === idx ? 'tm-hotel--hover' : ''}`}
                     onClick={() => selectHotel(idx)}
+                    onMouseEnter={() => {
+                      setHoveredHotelIdx(idx)
+                      mapRef.current?.highlightHotel(idx)
+                    }}
+                    onMouseLeave={() => {
+                      setHoveredHotelIdx(null)
+                      mapRef.current?.highlightHotel(null)
+                    }}
                   >
                     <div className="tm-hotel__badge">{`H${idx + 1}`}</div>
                     <div className="tm-hotel__main">
@@ -820,11 +838,19 @@ function App() {
                     const activeRouteKey = `${activeMode}-${selectedHotelIdx}-${placeIdx}-0`
                     const activeModeDisabled = routeLoadingKey === activeRouteKey || !activeSummary
                     return (
-                        <div
-                          key={`${p.input}-${placeIdx}`}
-                          id={`tm-place-${placeIdx}`}
-                          className={`tm-destcard ${focusPlaceIdx === placeIdx ? 'tm-destcard--focus' : ''}`}
-                        >
+                      <div
+                        key={`${p.input}-${placeIdx}`}
+                        id={`tm-place-${placeIdx}`}
+                        className={`tm-destcard ${focusPlaceIdx === placeIdx ? 'tm-destcard--focus' : ''} ${hoveredPlaceIdx === placeIdx ? 'tm-destcard--hover' : ''}`}
+                        onMouseEnter={() => {
+                          setHoveredPlaceIdx(placeIdx)
+                          mapRef.current?.highlightPlace(placeIdx)
+                        }}
+                        onMouseLeave={() => {
+                          setHoveredPlaceIdx(null)
+                          mapRef.current?.highlightPlace(null)
+                        }}
+                      >
                         <div className="tm-destcard__head">
                           <div className="tm-destcard__toprow">
                             <div className="tm-destcard__name">
@@ -1165,6 +1191,8 @@ function App() {
           onSelectHotel={handleHotelMarkerSelect}
           onSelectPlace={handlePlaceMarkerSelect}
           onSelectCandidate={handleCandidateMarkerSelect}
+          onHoverHotel={handleHotelMarkerHover}
+          onHoverPlace={handlePlaceMarkerHover}
         />
       </div>
 
