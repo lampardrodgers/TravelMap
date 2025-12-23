@@ -1,6 +1,15 @@
 import './App.css'
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
-import { comparePlaces, fetchCandidates, fetchRoute, recompareResolved, type CompareResponse, type Comparison, type ResolvedPlace } from './api'
+import {
+  comparePlaces,
+  fetchCandidates,
+  fetchRoute,
+  recompareResolved,
+  type CompareResponse,
+  type Comparison,
+  type ResolvedPlace,
+  type TransitPlanSummary,
+} from './api'
 import { MapView, type MapViewHandle } from './components/MapView'
 import { BikeIcon, BusIcon, CarIcon, ClockIcon, CoinIcon, PinIcon, SettingsIcon, SubwayIcon, WalkIcon } from './components/Icons'
 
@@ -140,6 +149,22 @@ function App() {
     }
 
     return legs
+  }
+
+  const getPlanLegs = (plan: TransitPlanSummary): TransitLeg[] => {
+    const rawLegs = plan.legs?.length ? (plan.legs as TransitLeg[]) : plan.summary ? legsFromSummary(plan.summary) : []
+    if (!plan.summary) return rawLegs
+    const parsed = legsFromSummary(plan.summary)
+    if (!parsed.length) return rawLegs
+    return rawLegs.map((l, idx) => {
+      if (l.kind === 'walking' && typeof l.distanceMeters !== 'number') {
+        const p = parsed[idx]
+        if (p?.kind === 'walking' && typeof p.distanceMeters === 'number') {
+          return { ...l, distanceMeters: p.distanceMeters }
+        }
+      }
+      return l
+    })
   }
 
   const parseLines = (text: string) =>
@@ -868,36 +893,89 @@ function App() {
                             {c?.transit?.plans?.length ? (
                               expanded ? (
                                 <div className="tm-planlist">
-                                  {c.transit.plans.map((plan, i) => {
-                                    const key = `transit-${selectedHotelIdx}-${placeIdx}-${i}`
-                                    const rawLegs =
-                                      plan.legs?.length ? (plan.legs as TransitLeg[]) : plan.summary ? legsFromSummary(plan.summary) : []
-                                    const legs = (() => {
-                                      if (!plan.summary) return rawLegs
-                                      const parsed = legsFromSummary(plan.summary)
-                                      if (!parsed.length) return rawLegs
-                                      return rawLegs.map((l, idx) => {
-                                        if (l.kind === 'walking' && typeof l.distanceMeters !== 'number') {
-                                          const p = parsed[idx]
-                                          if (p?.kind === 'walking' && typeof p.distanceMeters === 'number') {
-                                            return { ...l, distanceMeters: p.distanceMeters }
-                                          }
-                                        }
-                                        return l
-                                      })
+                                  {(() => {
+                                    const planMeta = c.transit.plans.map((plan, idx) => {
+                                      const legs = getPlanLegs(plan)
+                                      const transitLegs = legs.filter((l) => l.kind === 'bus' || l.kind === 'subway' || l.kind === 'railway')
+                                      const transferCount = transitLegs.length ? Math.max(0, transitLegs.length - 1) : null
+                                      return { plan, legs, transferCount, idx }
+                                    })
+                                    const minDuration = planMeta.length ? Math.min(...planMeta.map((m) => m.plan.durationSeconds)) : null
+                                    const minWalking = (() => {
+                                      const values = planMeta
+                                        .map((m) => m.plan.walkingDistanceMeters)
+                                        .filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
+                                      return values.length ? Math.min(...values) : null
                                     })()
-                                    return (
-                                      <div key={key} className="tm-plan">
-                                        <div className="tm-plan__head">
-                                          <div className="tm-plan__title">{`方案 ${i + 1}`}</div>
-                                          <button
-                                            className="tm-btn tm-btn--small"
-                                            onClick={() => onShowRoute({ mode: 'transit', placeIdx, planIndex: i })}
-                                            disabled={routeLoadingKey === key}
-                                          >
-                                            {routeLoadingKey === key ? '加载中…' : '在地图上显示'}
-                                          </button>
-                                        </div>
+                                    const minCost = (() => {
+                                      const values = planMeta
+                                        .map((m) => m.plan.costYuan)
+                                        .filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
+                                      return values.length ? Math.min(...values) : null
+                                    })()
+                                    const minTransfers = (() => {
+                                      const values = planMeta
+                                        .map((m) => m.transferCount)
+                                        .filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
+                                      return values.length ? Math.min(...values) : null
+                                    })()
+                                    const taggedPlans = planMeta.map((meta) => {
+                                      const tags = [
+                                        minDuration !== null && meta.plan.durationSeconds === minDuration
+                                          ? { id: 'time', label: '时间短', icon: <ClockIcon /> }
+                                          : null,
+                                        minWalking !== null && meta.plan.walkingDistanceMeters === minWalking
+                                          ? { id: 'walk', label: '步行少', icon: <WalkIcon /> }
+                                          : null,
+                                        minTransfers !== null && meta.transferCount === minTransfers
+                                          ? { id: 'transfer', label: '换乘少', icon: <SubwayIcon /> }
+                                          : null,
+                                        minCost !== null && meta.plan.costYuan === minCost
+                                          ? { id: 'cost', label: '花费少', icon: <CoinIcon /> }
+                                          : null,
+                                      ].filter(Boolean) as Array<{ id: 'time' | 'walk' | 'transfer' | 'cost'; label: string; icon: JSX.Element }>
+                                      const tagFlags = {
+                                        time: tags.some((tag) => tag.id === 'time'),
+                                        walk: tags.some((tag) => tag.id === 'walk'),
+                                        transfer: tags.some((tag) => tag.id === 'transfer'),
+                                        cost: tags.some((tag) => tag.id === 'cost'),
+                                      }
+                                      return { ...meta, tags, tagFlags }
+                                    })
+                                    const tagPriority: Array<'time' | 'walk' | 'transfer' | 'cost'> = ['time', 'walk', 'transfer', 'cost']
+                                    const sortedPlans = taggedPlans.slice().sort((a, b) => {
+                                      for (const key of tagPriority) {
+                                        if (a.tagFlags[key] === b.tagFlags[key]) continue
+                                        return a.tagFlags[key] ? -1 : 1
+                                      }
+                                      return a.idx - b.idx
+                                    })
+                                    return sortedPlans.map(({ plan, legs, idx, tags }, orderIdx) => {
+                                      const key = `transit-${selectedHotelIdx}-${placeIdx}-${idx}`
+                                      return (
+                                        <div key={key} className="tm-plan">
+                                          <div className="tm-plan__head">
+                                            <div className="tm-plan__meta">
+                                              <div className="tm-plan__title">{`方案 ${orderIdx + 1}`}</div>
+                                              {tags.length ? (
+                                                <div className="tm-plan__tags" aria-label="方案标签">
+                                                  {tags.map((tag) => (
+                                                    <span key={`${key}-${tag.id}`} className={`tm-plan-tag tm-plan-tag--${tag.id}`}>
+                                                      <span className="tm-plan-tag__icon">{tag.icon}</span>
+                                                      <span className="tm-plan-tag__text">{tag.label}</span>
+                                                    </span>
+                                                  ))}
+                                                </div>
+                                              ) : null}
+                                            </div>
+                                            <button
+                                              className="tm-btn tm-btn--small"
+                                              onClick={() => onShowRoute({ mode: 'transit', placeIdx, planIndex: idx })}
+                                              disabled={routeLoadingKey === key}
+                                            >
+                                              {routeLoadingKey === key ? '加载中…' : '在地图上显示'}
+                                            </button>
+                                          </div>
 
                                         <div className="tm-plan__statswrap" aria-label="整体行程信息">
                                           <div className="tm-plan__stats">
@@ -965,7 +1043,8 @@ function App() {
                                         ) : null}
                                       </div>
                                     )
-                                  })}
+                                  })
+                                })()}
                                 </div>
                               ) : fastestTransit ? (
                                 <div className="tm-transit-compact">

@@ -795,9 +795,66 @@
   gap: 10px;
 }
 
+.tm-plan__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
 .tm-plan__title {
   font-size: 12px;
   font-weight: 700;
+}
+
+.tm-plan__tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tm-plan-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 10px;
+  font-weight: 800;
+  color: rgba(229, 231, 235, 0.9);
+  white-space: nowrap;
+}
+
+.tm-plan-tag__icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.tm-plan-tag--time {
+  border-color: rgba(96, 165, 250, 0.35);
+  background: rgba(59, 130, 246, 0.12);
+  color: rgba(219, 234, 254, 0.95);
+}
+
+.tm-plan-tag--walk {
+  border-color: rgba(148, 163, 184, 0.35);
+  background: rgba(148, 163, 184, 0.10);
+  color: rgba(229, 231, 235, 0.92);
+}
+
+.tm-plan-tag--transfer {
+  border-color: rgba(167, 139, 250, 0.35);
+  background: rgba(139, 92, 246, 0.12);
+  color: rgba(229, 231, 235, 0.92);
+}
+
+.tm-plan-tag--cost {
+  border-color: rgba(251, 191, 36, 0.35);
+  background: rgba(245, 158, 11, 0.12);
+  color: rgba(254, 243, 199, 0.95);
 }
 
 .tm-plan__stats {
@@ -1162,7 +1219,7 @@
 }
 
 .tm-route-label {
-  max-width: 160px;
+  max-width: 180px;
   padding: 4px 8px;
   border-radius: 8px;
   font-size: 12px;
@@ -1171,9 +1228,34 @@
   background: var(--c);
   border: 1px solid rgba(255, 255, 255, 0.6);
   box-shadow: 0 12px 26px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tm-route-label--active {
+  max-width: none;
+  width: max-content;
+}
+
+.tm-route-label__main {
+  max-width: 160px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.tm-route-label__time {
+  font-size: 11px;
+  font-weight: 800;
+  color: rgba(15, 23, 42, 0.9);
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: 999px;
+  padding: 1px 6px;
+  white-space: nowrap;
 }
 
 .tm-route-stop {

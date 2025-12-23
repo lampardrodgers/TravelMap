@@ -16,6 +16,7 @@ export type RouteSegment = {
   kind: RoutePolyline['kind']
   label?: string
   path: Array<[number, number]>
+  durationSeconds?: number
   from?: { name: string | null; location: LngLat | null }
   to?: { name: string | null; location: LngLat | null }
 }
@@ -43,6 +44,12 @@ type AMapNamespace = {
 }
 
 type AMapMarkerLike = { show?: () => void; hide?: () => void; setContent?: (content: string) => void }
+type AMapOverlayLike = {
+  show?: () => void
+  hide?: () => void
+  on?: (event: string, handler: () => void) => void
+  off?: (event: string, handler: () => void) => void
+}
 
 function createMarkerHtml(label: string, variant: 'hotel' | 'place' | 'selected' | 'candidate' | 'candidate-active') {
   const cls =
@@ -63,6 +70,16 @@ function normalizeCenter(points: ResolvedPlace[]): LngLat | null {
   return points[0].location
 }
 
+function formatDurationLabel(seconds?: number) {
+  if (!Number.isFinite(seconds)) return null
+  const mins = Math.round(seconds / 60)
+  if (mins <= 0) return null
+  if (mins < 60) return `约 ${mins} 分`
+  const h = Math.floor(mins / 60)
+  const m = mins % 60
+  return `约 ${h} 小时 ${m} 分`
+}
+
 export const MapView = forwardRef<MapViewHandle, { amapKey?: string }>(function MapView({ amapKey: amapKeyOverride }, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<AMapMap | null>(null)
@@ -71,7 +88,18 @@ export const MapView = forwardRef<MapViewHandle, { amapKey?: string }>(function 
   const candidateOverlaysRef = useRef<unknown[]>([])
   const candidateMarkersRef = useRef<Array<{ marker: unknown; label: string }>>([])
   const routeOverlaysRef = useRef<unknown[]>([])
-  const routeLabelMarkersRef = useRef<Array<{ marker: unknown; kind: RoutePolyline['kind'] }>>([])
+  const routeLabelMarkersRef = useRef<
+    Array<{
+      marker: unknown
+      kind: RoutePolyline['kind']
+      alwaysShow: boolean
+      segmentIndex: number
+      baseLabel: string
+      color: string
+      durationSeconds?: number
+    }>
+  >([])
+  const activeSegmentRef = useRef<number | null>(null)
   const pendingPointsRef = useRef<{ hotels: ResolvedPlace[]; places: ResolvedPlace[]; selectedHotelIdx: number | null } | null>(null)
   const pendingRouteRef = useRef<{ polylines: RoutePolyline[]; segments?: RouteSegment[] } | null>(null)
   const pendingCandidatesRef = useRef<{ candidates: ResolvedPlace[] } | null>(null)
@@ -112,6 +140,7 @@ export const MapView = forwardRef<MapViewHandle, { amapKey?: string }>(function 
     routeOverlaysRef.current.forEach((o) => map.remove(o))
     routeOverlaysRef.current = []
     routeLabelMarkersRef.current = []
+    activeSegmentRef.current = null
     lastRouteRef.current = null
   }, [])
 
@@ -243,7 +272,15 @@ export const MapView = forwardRef<MapViewHandle, { amapKey?: string }>(function 
 
     const overlays: unknown[] = []
     const stopKeySet = new Set<string>()
-    const labelMarkers: Array<{ marker: unknown; kind: RoutePolyline['kind']; alwaysShow: boolean }> = []
+    const labelMarkers: Array<{
+      marker: unknown
+      kind: RoutePolyline['kind']
+      alwaysShow: boolean
+      segmentIndex: number
+      baseLabel: string
+      color: string
+      durationSeconds?: number
+    }> = []
     const zoom = map.getZoom?.() ?? 0
 
     const escapeHtml = (value: string) =>
@@ -264,7 +301,28 @@ export const MapView = forwardRef<MapViewHandle, { amapKey?: string }>(function 
         }
       })
 
-    for (const seg of items) {
+    const buildRouteLabelHtml = (label: string, color: string, timeText?: string | null) => {
+      const safeLabel = escapeHtml(label)
+      if (!timeText) return `<div class="tm-route-label" style="--c:${color}"><span class="tm-route-label__main">${safeLabel}</span></div>`
+      return `<div class="tm-route-label tm-route-label--active" style="--c:${color}"><span class="tm-route-label__main">${safeLabel}</span><span class="tm-route-label__time">${escapeHtml(timeText)}</span></div>`
+    }
+
+    const setSegmentFocus = (nextIndex: number | null) => {
+      activeSegmentRef.current = nextIndex
+      routeLabelMarkersRef.current.forEach((item) => {
+        const markerApi = item.marker as unknown as AMapMarkerLike
+        const isActive = nextIndex !== null && item.segmentIndex === nextIndex
+        const timeText = isActive ? formatDurationLabel(item.durationSeconds) : null
+        markerApi?.setContent?.(buildRouteLabelHtml(item.baseLabel, item.color, timeText))
+      })
+
+      const handler = onZoomEndRef.current
+      if (handler) handler()
+    }
+
+    const allowSegmentFocus = Boolean(segments?.length)
+
+    items.forEach((seg, segIndex) => {
       const color = getColor(seg.kind, seg.label)
       const style = (() => {
         switch (seg.kind) {
@@ -310,14 +368,29 @@ export const MapView = forwardRef<MapViewHandle, { amapKey?: string }>(function 
       if (mid) {
         const marker = new AMap.Marker({
           position: mid,
-          content: `<div class="tm-route-label" style="--c:${color}">${escapeHtml(labelText)}</div>`,
+          content: buildRouteLabelHtml(labelText, color),
           offset: new AMap.Pixel(-14, -14),
         })
         const markerApi = marker as unknown as AMapMarkerLike
         if (!shouldShowLabel(seg.kind, zoom)) markerApi?.hide?.()
         const alwaysShow = (seg.kind === 'walking' && isPureWalking) || (seg.kind === 'cycling' && isPureCycling)
-        labelMarkers.push({ marker, kind: seg.kind, alwaysShow })
+        labelMarkers.push({
+          marker,
+          kind: seg.kind,
+          alwaysShow,
+          segmentIndex: segIndex,
+          baseLabel: labelText,
+          color,
+          durationSeconds: seg.durationSeconds,
+        })
         overlays.push(marker)
+        if (allowSegmentFocus) {
+          const markerOverlay = marker as unknown as AMapOverlayLike
+          markerOverlay?.on?.('click', () => {
+            const nextIndex = activeSegmentRef.current === segIndex ? null : segIndex
+            setSegmentFocus(nextIndex)
+          })
+        }
       }
 
       const pushStop = (stop: RouteSegment['from'] | RouteSegment['to']) => {
@@ -336,7 +409,7 @@ export const MapView = forwardRef<MapViewHandle, { amapKey?: string }>(function 
 
       pushStop(seg.from)
       pushStop(seg.to)
-    }
+    })
 
     overlays.forEach((o) => map.add(o))
     routeOverlaysRef.current = overlays

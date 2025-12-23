@@ -81,9 +81,12 @@ function getBicyclingPaths(json) {
 }
 
 function parseLocation(locationText) {
-  const parsed = parseLngLatText(locationText)
+  const raw = String(locationText ?? '').trim()
+  if (!raw) return null
+  const normalized = raw.split(/[;|]/)[0]?.trim() || ''
+  const parsed = parseLngLatText(normalized)
   if (parsed) return parsed
-  const parts = String(locationText).split(',')
+  const parts = normalized.split(',')
   if (parts.length !== 2) return null
   const lng = Number(parts[0])
   const lat = Number(parts[1])
@@ -142,18 +145,23 @@ export async function resolvePlace({ text, city, cityLimit, amapKey }) {
 
   /** @type {any[]} */
   const pois = poiJson?.pois || []
-  const firstPoi = pois[0]
-  const poiLocationText = firstPoi?.entr_location || firstPoi?.location
-  if (poiLocationText) {
-    const location = parseLocation(poiLocationText)
-    if (!location) throw new Error(`POI 解析失败：location=${firstPoi.location}`)
+  let matchedPoi = null
+  let matchedLocation = null
+  for (const poi of pois) {
+    const location = parseLocation(poi?.entr_location) || parseLocation(poi?.location)
+    if (!location) continue
+    matchedPoi = poi
+    matchedLocation = location
+    break
+  }
+  if (matchedPoi && matchedLocation) {
     return {
       input: text,
-      name: firstPoi.name || text,
-      address: firstPoi.address || null,
-      location,
-      citycode: firstPoi.citycode || null,
-      adcode: firstPoi.adcode || null,
+      name: matchedPoi.name || text,
+      address: matchedPoi.address || null,
+      location: matchedLocation,
+      citycode: matchedPoi.citycode || null,
+      adcode: matchedPoi.adcode || null,
       source: 'poi',
     }
   }
@@ -361,6 +369,20 @@ function summarizeTransitSegment(segment) {
   return { text: parts.filter(Boolean).join(' → '), hasTaxi, legs }
 }
 
+function pickDurationSeconds(...values) {
+  for (const value of values) {
+    const parsed = parseNumber(value)
+    if (parsed !== null) return parsed
+  }
+  return null
+}
+
+function estimateDurationSeconds(distanceMeters, speedMps) {
+  const distance = parseNumber(distanceMeters)
+  if (distance === null || distance <= 0 || !Number.isFinite(speedMps) || speedMps <= 0) return null
+  return Math.round(distance / speedMps)
+}
+
 export async function getTransitSummary({ origin, destination, city, cityd, strategy, maxPlans, amapKey }) {
   const json = await amapGetJson('direction/transit/integrated', {
     origin: lngLatToText(origin),
@@ -500,7 +522,15 @@ export async function getTransitRoutePolylines({ origin, destination, city, city
   const transit = transits[idx]
   const segments = Array.isArray(transit?.segments) ? transit.segments : []
 
-  /** @type {Array<{kind: string, label: string, path: Array<[number, number]>, from?: {name: string | null, location: {lng: number, lat: number} | null}, to?: {name: string | null, location: {lng: number, lat: number} | null}}>} */
+  const speed = {
+    walking: 1.2,
+    bus: 6,
+    subway: 8,
+    railway: 15,
+    taxi: 9,
+  }
+
+  /** @type {Array<{kind: string, label: string, path: Array<[number, number]>, durationSeconds?: number, from?: {name: string | null, location: {lng: number, lat: number} | null}, to?: {name: string | null, location: {lng: number, lat: number} | null}}>} */
   const routeSegments = []
 
   for (const seg of segments) {
@@ -510,10 +540,14 @@ export async function getTransitRoutePolylines({ origin, destination, city, city
       if (walkPath.length) {
         const fromLoc = walking?.origin ? parseLocation(walking.origin) : null
         const toLoc = walking?.destination ? parseLocation(walking.destination) : null
+        const walkDistance = parseNumber(walking?.distance)
+        const walkDuration =
+          pickDurationSeconds(walking?.duration) ?? estimateDurationSeconds(walkDistance, speed.walking)
         routeSegments.push({
           kind: 'walking',
           label: '步行',
           path: walkPath,
+          durationSeconds: walkDuration ?? undefined,
           from: { name: null, location: fromLoc },
           to: { name: null, location: toLoc },
         })
@@ -524,10 +558,14 @@ export async function getTransitRoutePolylines({ origin, destination, city, city
     if (taxi?.polyline) {
       const taxiPath = polylineTextToPath(taxi.polyline)
       if (taxiPath.length) {
+        const taxiDistance = parseNumber(taxi?.distance)
+        const taxiDuration =
+          pickDurationSeconds(taxi?.duration) ?? estimateDurationSeconds(taxiDistance, speed.taxi)
         routeSegments.push({
           kind: 'taxi',
           label: '打车',
           path: taxiPath,
+          durationSeconds: taxiDuration ?? undefined,
         })
       }
     }
@@ -544,10 +582,15 @@ export async function getTransitRoutePolylines({ origin, destination, city, city
       const toStop = line?.arrival_stop
       const fromLoc = fromStop?.location ? parseLocation(fromStop.location) : null
       const toLoc = toStop?.location ? parseLocation(toStop.location) : null
+      const lineDistance = parseNumber(line?.distance)
+      const lineDuration =
+        pickDurationSeconds(line?.duration) ??
+        estimateDurationSeconds(lineDistance, kind === 'subway' ? speed.subway : speed.bus)
       routeSegments.push({
         kind,
         label: short,
         path: busPath,
+        durationSeconds: lineDuration ?? undefined,
         from: { name: fromStop?.name || null, location: fromLoc },
         to: { name: toStop?.name || null, location: toLoc },
       })
@@ -557,10 +600,15 @@ export async function getTransitRoutePolylines({ origin, destination, city, city
     if (railway?.polyline) {
       const railwayPath = polylineTextToPath(railway.polyline)
       if (railwayPath.length) {
+        const railDistance = parseNumber(railway?.distance) ?? parseNumber(railway?.trip?.distance)
+        const railDuration =
+          pickDurationSeconds(railway?.duration, railway?.trip?.duration) ??
+          estimateDurationSeconds(railDistance, speed.railway)
         routeSegments.push({
           kind: 'railway',
           label: String(railway?.name || '铁路'),
           path: railwayPath,
+          durationSeconds: railDuration ?? undefined,
         })
       }
     }

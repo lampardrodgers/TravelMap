@@ -75,6 +75,7 @@ export type RouteResponse = {
     kind: RoutePolyline['kind']
     label: string
     path: Array<[number, number]>
+    durationSeconds?: number
     from?: { name: string | null; location: LngLat | null }
     to?: { name: string | null; location: LngLat | null }
   }>
