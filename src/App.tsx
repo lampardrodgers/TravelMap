@@ -92,6 +92,8 @@ function App() {
   const mapRef = useRef<MapViewHandle | null>(null)
   const candidateRequestRef = useRef<string | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(520)
+  const [focusPlaceIdx, setFocusPlaceIdx] = useState<number | null>(null)
+  const focusPlaceTimeoutRef = useRef<number | null>(null)
   const splitterDragRef = useRef<{ active: boolean; startX: number; startWidth: number; pointerId: number | null }>({
     active: false,
     startX: 0,
@@ -359,6 +361,43 @@ function App() {
     }
   }
 
+  const focusPlace = (placeIdx: number) => {
+    const placesLen = data?.places.length ?? 0
+    if (placeIdx < 0 || placeIdx >= placesLen) return
+    setExpandedPlaces((prev) => {
+      const next = prev.length === placesLen ? prev.slice() : Array.from({ length: placesLen }, () => false)
+      next[placeIdx] = true
+      return next
+    })
+    setFocusPlaceIdx(placeIdx)
+    if (focusPlaceTimeoutRef.current) window.clearTimeout(focusPlaceTimeoutRef.current)
+    focusPlaceTimeoutRef.current = window.setTimeout(() => setFocusPlaceIdx(null), 1800)
+    if (typeof document !== 'undefined') {
+      const el = document.getElementById(`tm-place-${placeIdx}`)
+      el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }
+
+  const handleHotelMarkerSelect = (idx: number) => {
+    if (!data) return
+    selectHotel(idx)
+  }
+
+  const handlePlaceMarkerSelect = (idx: number) => {
+    if (!data) return
+    focusPlace(idx)
+  }
+
+  const handleCandidateMarkerSelect = (idx: number) => {
+    if (!candidatePanel || !data) return
+    const candidate = candidateList[idx]
+    if (!candidate) return
+    const current = candidatePanel.kind === 'hotel' ? data.hotels[candidatePanel.idx] : data.places[candidatePanel.idx]
+    if (!current) return
+    if (isSameLocation(candidate.location, current.location)) return
+    void applyCandidate(candidatePanel.kind, candidatePanel.idx, candidate)
+  }
+
   const onCompare = async () => {
     setError(null)
     setLoading(true)
@@ -573,6 +612,12 @@ function App() {
     mapRef.current?.highlightCandidate(null)
   }, [candidateList, candidatePanel])
 
+  useEffect(() => {
+    return () => {
+      if (focusPlaceTimeoutRef.current) window.clearTimeout(focusPlaceTimeoutRef.current)
+    }
+  }, [])
+
   const clampSidebarWidth = (next: number) => {
     const min = 360
     const max = Math.max(min, (typeof window !== 'undefined' ? window.innerWidth : 1200) - 320)
@@ -775,7 +820,11 @@ function App() {
                     const activeRouteKey = `${activeMode}-${selectedHotelIdx}-${placeIdx}-0`
                     const activeModeDisabled = routeLoadingKey === activeRouteKey || !activeSummary
                     return (
-                      <div key={`${p.input}-${placeIdx}`} className="tm-destcard">
+                        <div
+                          key={`${p.input}-${placeIdx}`}
+                          id={`tm-place-${placeIdx}`}
+                          className={`tm-destcard ${focusPlaceIdx === placeIdx ? 'tm-destcard--focus' : ''}`}
+                        >
                         <div className="tm-destcard__head">
                           <div className="tm-destcard__toprow">
                             <div className="tm-destcard__name">
@@ -1110,7 +1159,13 @@ function App() {
         onPointerCancel={endSplitterDrag}
       />
       <div className="tm-mapwrap">
-        <MapView ref={mapRef} amapKey={runtimeAmapKey} />
+        <MapView
+          ref={mapRef}
+          amapKey={runtimeAmapKey}
+          onSelectHotel={handleHotelMarkerSelect}
+          onSelectPlace={handlePlaceMarkerSelect}
+          onSelectCandidate={handleCandidateMarkerSelect}
+        />
       </div>
 
       {settingsOpen ? (

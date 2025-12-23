@@ -80,7 +80,15 @@ function formatDurationLabel(seconds?: number) {
   return `约 ${h} 小时 ${m} 分`
 }
 
-export const MapView = forwardRef<MapViewHandle, { amapKey?: string }>(function MapView({ amapKey: amapKeyOverride }, ref) {
+export const MapView = forwardRef<
+  MapViewHandle,
+  {
+    amapKey?: string
+    onSelectHotel?: (index: number) => void
+    onSelectPlace?: (index: number) => void
+    onSelectCandidate?: (index: number) => void
+  }
+>(function MapView({ amapKey: amapKeyOverride, onSelectHotel, onSelectPlace, onSelectCandidate }, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<AMapMap | null>(null)
   const amapRef = useRef<AMapNamespace | null>(null)
@@ -107,6 +115,9 @@ export const MapView = forwardRef<MapViewHandle, { amapKey?: string }>(function 
   const lastRouteRef = useRef<{ polylines: RoutePolyline[]; segments?: RouteSegment[] } | null>(null)
   const lastCandidatesRef = useRef<{ candidates: ResolvedPlace[] } | null>(null)
   const onZoomEndRef = useRef<(() => void) | null>(null)
+  const onSelectHotelRef = useRef<typeof onSelectHotel>(onSelectHotel)
+  const onSelectPlaceRef = useRef<typeof onSelectPlace>(onSelectPlace)
+  const onSelectCandidateRef = useRef<typeof onSelectCandidate>(onSelectCandidate)
   const envAmapKey = import.meta.env.VITE_AMAP_KEY as string | undefined
   const amapKey = amapKeyOverride || envAmapKey
   const securityJsCode = import.meta.env.VITE_AMAP_SECURITY_CODE as string | undefined
@@ -115,6 +126,12 @@ export const MapView = forwardRef<MapViewHandle, { amapKey?: string }>(function 
   useEffect(() => {
     setLoadError(!amapKey ? '缺少高德 Key，无法加载地图' : null)
   }, [amapKey])
+
+  useEffect(() => {
+    onSelectHotelRef.current = onSelectHotel
+    onSelectPlaceRef.current = onSelectPlace
+    onSelectCandidateRef.current = onSelectCandidate
+  }, [onSelectHotel, onSelectPlace, onSelectCandidate])
 
   const clearMarkers = useCallback(() => {
     const map = mapRef.current
@@ -166,6 +183,8 @@ export const MapView = forwardRef<MapViewHandle, { amapKey?: string }>(function 
         content: createMarkerHtml(`H${idx + 1}`, variant),
         offset: new AMap.Pixel(-12, -12),
       })
+      const markerOverlay = marker as unknown as AMapOverlayLike
+      markerOverlay?.on?.('click', () => onSelectHotelRef.current?.(idx))
       overlays.push(marker)
     })
 
@@ -176,6 +195,8 @@ export const MapView = forwardRef<MapViewHandle, { amapKey?: string }>(function 
         content: createMarkerHtml(`P${idx + 1}`, 'place'),
         offset: new AMap.Pixel(-12, -12),
       })
+      const markerOverlay = marker as unknown as AMapOverlayLike
+      markerOverlay?.on?.('click', () => onSelectPlaceRef.current?.(idx))
       overlays.push(marker)
     })
 
@@ -208,6 +229,8 @@ export const MapView = forwardRef<MapViewHandle, { amapKey?: string }>(function 
         content: createMarkerHtml(label, 'candidate'),
         offset: new AMap.Pixel(-12, -12),
       })
+      const markerOverlay = marker as unknown as AMapOverlayLike
+      markerOverlay?.on?.('click', () => onSelectCandidateRef.current?.(idx))
       overlays.push(marker)
       markers.push({ marker, label })
     })
