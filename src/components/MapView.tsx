@@ -138,11 +138,9 @@ export const MapView = forwardRef<
   const envAmapKey = import.meta.env.VITE_AMAP_KEY as string | undefined
   const amapKey = amapKeyOverride || envAmapKey
   const securityJsCode = import.meta.env.VITE_AMAP_SECURITY_CODE as string | undefined
-  const [loadError, setLoadError] = useState<string | null>(() => (!amapKey ? '缺少高德 Key，无法加载地图' : null))
-
-  useEffect(() => {
-    setLoadError(!amapKey ? '缺少高德 Key，无法加载地图' : null)
-  }, [amapKey])
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const keyError = !amapKey ? '缺少高德 Key，无法加载地图' : null
+  const displayError = keyError ?? loadError
 
   useEffect(() => {
     onSelectHotelRef.current = onSelectHotel
@@ -631,7 +629,7 @@ export const MapView = forwardRef<
 
   return (
     <div className="tm-map">
-      {loadError ? <div className="tm-map__error">{loadError}</div> : null}
+      {displayError ? <div className="tm-map__error">{displayError}</div> : null}
       <div ref={containerRef} className="tm-map__container" />
     </div>
   )
