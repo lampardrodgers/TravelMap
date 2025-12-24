@@ -1,6 +1,6 @@
 import AMapLoader from '@amap/amap-jsapi-loader'
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import type { LngLat, ResolvedPlace, RoutePolyline } from '../api'
+import type { LngLat, ResolvedPlace, RoutePolyline } from '../domain/types'
 
 export type MapViewHandle = {
   setPoints: (params: { hotels: ResolvedPlace[]; places: ResolvedPlace[]; selectedHotelIdx: number | null }) => void
@@ -79,7 +79,7 @@ function normalizeCenter(points: ResolvedPlace[]): LngLat | null {
 }
 
 function formatDurationLabel(seconds?: number) {
-  if (!Number.isFinite(seconds)) return null
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds)) return null
   const mins = Math.round(seconds / 60)
   if (mins <= 0) return null
   if (mins < 60) return `约 ${mins} 分`
@@ -346,20 +346,96 @@ export const MapView = forwardRef<
 
     clearRoute()
 
-    const palette = ['#22c55e', '#a855f7', '#0ea5e9', '#f97316', '#eab308', '#10b981', '#ef4444', '#06b6d4', '#84cc16', '#fb7185', '#6366f1']
-    const hashToIndex = (text: string) => {
-      let h = 0
-      for (let i = 0; i < text.length; i += 1) h = (h * 31 + text.charCodeAt(i)) >>> 0
-      return h % palette.length
+    const transitKinds = new Set<RoutePolyline['kind']>(['subway', 'bus', 'railway'])
+    const transitColorCache = new Map<string, string>()
+    const transitLineOverrides: Record<string, string> = {}
+
+    const normalizeLineLabel = (label?: string) => {
+      if (!label) return ''
+      return String(label).replace(/\s+/g, '').replace(/（/g, '(').replace(/）/g, ')')
     }
 
-    const getColor = (kind: RoutePolyline['kind'], label?: string) => {
+    const hexToRgb = (value: string) => {
+      const hex = value.replace('#', '').trim()
+      if (hex.length === 3) {
+        const r = Number.parseInt(hex[0] + hex[0], 16)
+        const g = Number.parseInt(hex[1] + hex[1], 16)
+        const b = Number.parseInt(hex[2] + hex[2], 16)
+        return Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b) ? { r, g, b } : null
+      }
+      if (hex.length !== 6) return null
+      const r = Number.parseInt(hex.slice(0, 2), 16)
+      const g = Number.parseInt(hex.slice(2, 4), 16)
+      const b = Number.parseInt(hex.slice(4, 6), 16)
+      return Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b) ? { r, g, b } : null
+    }
+
+    const colorDistance = (a: string, b: string) => {
+      const c1 = hexToRgb(a)
+      const c2 = hexToRgb(b)
+      if (!c1 || !c2) return Number.MAX_SAFE_INTEGER
+      const dr = c1.r - c2.r
+      const dg = c1.g - c2.g
+      const db = c1.b - c2.b
+      return Math.sqrt(dr * dr + dg * dg + db * db)
+    }
+
+    const stringToHue = (text: string) => {
+      let h = 0
+      for (let i = 0; i < text.length; i += 1) h = (h * 31 + text.charCodeAt(i)) >>> 0
+      return h % 360
+    }
+
+    const hslToHex = (h: number, s: number, l: number) => {
+      const sat = Math.max(0, Math.min(100, s)) / 100
+      const light = Math.max(0, Math.min(100, l)) / 100
+      const c = (1 - Math.abs(2 * light - 1)) * sat
+      const hh = ((h % 360) + 360) % 360 / 60
+      const x = c * (1 - Math.abs((hh % 2) - 1))
+      let r = 0
+      let g = 0
+      let b = 0
+      if (hh >= 0 && hh < 1) [r, g, b] = [c, x, 0]
+      else if (hh >= 1 && hh < 2) [r, g, b] = [x, c, 0]
+      else if (hh >= 2 && hh < 3) [r, g, b] = [0, c, x]
+      else if (hh >= 3 && hh < 4) [r, g, b] = [0, x, c]
+      else if (hh >= 4 && hh < 5) [r, g, b] = [x, 0, c]
+      else [r, g, b] = [c, 0, x]
+      const m = light - c / 2
+      const toHex = (v: number) => {
+        const n = Math.round((v + m) * 255)
+        return n.toString(16).padStart(2, '0')
+      }
+      return `#${toHex(r)}${toHex(g)}${toHex(b)}`
+    }
+
+    const pickTransitColor = (key: string, avoid: string | null) => {
+      const baseHue = stringToHue(key)
+      let hue = baseHue
+      let color = hslToHex(hue, 68, 48)
+      if (!avoid) return color
+      for (let step = 0; step < 10; step += 1) {
+        if (colorDistance(color, avoid) >= 80) return color
+        hue = (baseHue + 34 * (step + 1)) % 360
+        color = hslToHex(hue, 68, 48)
+      }
+      return color
+    }
+
+    const getColor = (kind: RoutePolyline['kind'], label: string | undefined, avoidTransitColor: string | null) => {
       if (kind === 'driving') return '#2563eb'
       if (kind === 'taxi') return '#dc2626'
       if (kind === 'walking') return '#64748b'
       if (kind === 'cycling') return '#0ea5e9'
-      const key = label || kind
-      return palette[hashToIndex(key)]
+      const lineKey = normalizeLineLabel(label) || kind
+      const override = transitLineOverrides[lineKey]
+      if (override) return override
+      if (!transitKinds.has(kind)) return hslToHex(stringToHue(lineKey), 68, 48)
+      const cached = transitColorCache.get(lineKey)
+      if (cached) return cached
+      const color = pickTransitColor(lineKey, avoidTransitColor)
+      transitColorCache.set(lineKey, color)
+      return color
     }
 
     const items: RouteSegment[] = segments?.length
@@ -437,8 +513,9 @@ export const MapView = forwardRef<
 
     const allowSegmentFocus = Boolean(segments?.length)
 
+    let lastTransitColor: string | null = null
     items.forEach((seg, segIndex) => {
-      const color = getColor(seg.kind, seg.label)
+      const color = getColor(seg.kind, seg.label, lastTransitColor)
       const style = (() => {
         switch (seg.kind) {
           case 'driving':
@@ -456,6 +533,8 @@ export const MapView = forwardRef<
             return { strokeColor: color, strokeWeight: 6, strokeOpacity: 0.92 }
         }
       })()
+
+      if (transitKinds.has(seg.kind)) lastTransitColor = color
 
       const overlay = new AMap.Polyline({
         path: seg.path,

@@ -1,90 +1,6 @@
-import { createRateLimiter, parseLngLatText, parseNumber, sleep } from './utils.js'
-
-const AMAP_API_BASE = 'https://restapi.amap.com/v3'
-const AMAP_API_BASE_V4 = 'https://restapi.amap.com/v4'
-const AMAP_CONCURRENCY = Number(process.env.AMAP_CONCURRENCY || 2)
-const AMAP_QPS = Number(process.env.AMAP_QPS || 3)
-const AMAP_MAX_RETRIES = Number(process.env.AMAP_MAX_RETRIES || 3)
-const AMAP_TIMEOUT_MS = Number(process.env.AMAP_TIMEOUT_MS || 8000)
-const AMAP_QUEUE_LIMIT = Number(process.env.AMAP_QUEUE_LIMIT || 120)
-
-const requestLimiter = createRateLimiter({
-  maxConcurrent: Number.isFinite(AMAP_CONCURRENCY) && AMAP_CONCURRENCY > 0 ? AMAP_CONCURRENCY : 2,
-  minIntervalMs: Number.isFinite(AMAP_QPS) && AMAP_QPS > 0 ? Math.ceil(1000 / AMAP_QPS) : 350,
-  maxQueueSize: Number.isFinite(AMAP_QUEUE_LIMIT) && AMAP_QUEUE_LIMIT >= 0 ? AMAP_QUEUE_LIMIT : undefined,
-})
-
-export function getAmapKey(override) {
-  const custom = typeof override === 'string' ? override.trim() : ''
-  if (custom) return custom
-  return process.env.AMAP_WEB_KEY || process.env.AMAP_KEY || process.env.VITE_AMAP_KEY || ''
-}
-
-function requireAmapKey(override) {
-  const key = getAmapKey(override)
-  if (!key) throw new Error('缺少高德 Key：请设置 AMAP_WEB_KEY 或 AMAP_KEY（也可复用 VITE_AMAP_KEY）')
-  return key
-}
-
-function buildUrl(base, pathname, params) {
-  const url = new URL(`${base}/${pathname}`)
-  for (const [key, value] of Object.entries(params)) {
-    if (value === undefined || value === null) continue
-    url.searchParams.set(key, String(value))
-  }
-  return url
-}
-
-async function amapGetJson(pathname, params, amapKey, options = {}) {
-  const {
-    base = AMAP_API_BASE,
-    isOk = (json) => json?.status === '1',
-    getErrorInfo = (json) => ({
-      info: String(json?.info || 'UNKNOWN'),
-      code: String(json?.infocode || 'N/A'),
-    }),
-    isQpsExceeded = (info, code) => code === '10021' || info === 'CUQPS_HAS_EXCEEDED_THE_LIMIT',
-  } = options
-
-  const url = buildUrl(base, pathname, { ...params, key: requireAmapKey(amapKey) })
-  const maxRetries = Number.isFinite(AMAP_MAX_RETRIES) ? Math.max(0, Math.min(AMAP_MAX_RETRIES, 8)) : 3
-  const timeoutMs = Number.isFinite(AMAP_TIMEOUT_MS) && AMAP_TIMEOUT_MS > 0 ? AMAP_TIMEOUT_MS : 8000
-
-  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-    const json = await requestLimiter(async () => {
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
-      try {
-        const resp = await fetch(url, { signal: controller.signal })
-        if (!resp.ok) {
-          throw new Error(`高德请求失败：${resp.status} ${resp.statusText}`)
-        }
-        return /** @type {any} */ (await resp.json())
-      } catch (err) {
-        if (err?.name === 'AbortError') {
-          throw new Error(`高德请求超时（${timeoutMs}ms）`)
-        }
-        throw err
-      } finally {
-        clearTimeout(timeoutId)
-      }
-    })
-
-    if (isOk(json)) return json
-
-    const { info, code } = getErrorInfo(json)
-    const qpsExceeded = isQpsExceeded(info, code)
-    if (qpsExceeded && attempt < maxRetries) {
-      const backoffMs = 350 * Math.pow(2, attempt) + Math.floor(Math.random() * 120)
-      await sleep(backoffMs)
-      continue
-    }
-
-    throw new Error(`高德返回错误：${info} (${code})`)
-  }
-
-  throw new Error('高德请求失败：重试次数已用尽')
-}
+import { parseNumber } from '../../utils.js'
+import { amapGetJson, amapBases } from './client.js'
+import { lngLatToText, parseLocation } from './geo.js'
 
 function getBicyclingPaths(json) {
   const dataPaths = Array.isArray(json?.data?.paths) ? json.data.paths : []
@@ -95,191 +11,17 @@ function getBicyclingPaths(json) {
   return rawPaths
 }
 
-function parseLocation(locationText) {
-  const raw = String(locationText ?? '').trim()
-  if (!raw) return null
-  const normalized = raw.split(/[;|]/)[0]?.trim() || ''
-  const parsed = parseLngLatText(normalized)
-  if (parsed) return parsed
-  const parts = normalized.split(',')
-  if (parts.length !== 2) return null
-  const lng = Number(parts[0])
-  const lat = Number(parts[1])
-  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null
-  return { lng, lat }
-}
-
-export function lngLatToText(lngLat) {
-  return `${lngLat.lng},${lngLat.lat}`
-}
-
-export async function resolvePlace({ text, city, cityLimit, amapKey }) {
-  const coord = parseLngLatText(text)
-  if (coord) {
-    try {
-      const regeo = await amapGetJson('geocode/regeo', {
-        location: lngLatToText(coord),
-        extensions: 'base',
-        radius: 1000,
-      }, amapKey)
-      const comp = regeo?.regeocode?.addressComponent
-      const formatted = regeo?.regeocode?.formatted_address
-      return {
-        input: text,
-        name: formatted || text,
-        address: formatted || null,
-        location: coord,
-        citycode: comp?.citycode || null,
-        adcode: comp?.adcode || null,
-        source: 'coord',
-      }
-    } catch {
-      // 坐标兜底：不阻塞后续规划
-    }
-    return {
-      input: text,
-      name: text,
-      address: null,
-      location: coord,
-      citycode: null,
-      adcode: null,
-      source: 'coord',
-    }
-  }
-
-  // 1) POI 文本搜索（更适合酒店/地标）
-  const poiJson = await amapGetJson('place/text', {
-    keywords: text,
-    // 用 all 拿到 entr_location 等字段；大型 POI（机场/园区/商场）用 location 往往是“中心点”，会导致公交规划偏离真实出入口
-    extensions: 'all',
-    offset: 1,
-    page: 1,
-    city: city || undefined,
-    citylimit: cityLimit && city ? 'true' : undefined,
-  }, amapKey)
-
-  /** @type {any[]} */
-  const pois = poiJson?.pois || []
-  let matchedPoi = null
-  let matchedLocation = null
-  for (const poi of pois) {
-    const location = parseLocation(poi?.entr_location) || parseLocation(poi?.location)
-    if (!location) continue
-    matchedPoi = poi
-    matchedLocation = location
-    break
-  }
-  if (matchedPoi && matchedLocation) {
-    return {
-      input: text,
-      name: matchedPoi.name || text,
-      address: matchedPoi.address || null,
-      location: matchedLocation,
-      citycode: matchedPoi.citycode || null,
-      adcode: matchedPoi.adcode || null,
-      source: 'poi',
-    }
-  }
-
-  // 2) 地理编码兜底（适合详细地址）
-  const geoJson = await amapGetJson('geocode/geo', {
-    address: text,
-    city: city || undefined,
-  }, amapKey)
-  /** @type {any[]} */
-  const geocodes = geoJson?.geocodes || []
-  const firstGeo = geocodes[0]
-  if (firstGeo?.location) {
-    const location = parseLocation(firstGeo.location)
-    if (!location) throw new Error(`地理编码解析失败：location=${firstGeo.location}`)
-    return {
-      input: text,
-      name: firstGeo.formatted_address || text,
-      address: firstGeo.formatted_address || null,
-      location,
-      citycode: firstGeo.citycode || null,
-      adcode: firstGeo.adcode || null,
-      source: 'geocode',
-    }
-  }
-
-  throw new Error(`未找到地点：${text}`)
-}
-
-function buildPoiCandidates({ text, pois }) {
-  const seen = new Set()
-  const candidates = []
-  for (const poi of pois) {
-    const poiLocationText = poi?.entr_location || poi?.location
-    if (!poiLocationText) continue
-    const location = parseLocation(poiLocationText)
-    if (!location) continue
-    const key = `${location.lng.toFixed(6)},${location.lat.toFixed(6)}-${poi?.name || ''}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    candidates.push({
-      input: text,
-      name: poi?.name || text,
-      address: poi?.address || null,
-      location,
-      citycode: poi?.citycode || null,
-      adcode: poi?.adcode || null,
-      source: 'poi',
-    })
-  }
-  return candidates
-}
-
-export async function searchPlaceCandidates({ text, city, cityLimit, limit, amapKey }) {
-  const coord = parseLngLatText(text)
-  if (coord) return []
-
-  const capped = Math.max(1, Math.min(Number(limit ?? 8), 20))
-  const poiJson = await amapGetJson('place/text', {
-    keywords: text,
-    extensions: 'all',
-    offset: capped,
-    page: 1,
-    city: city || undefined,
-    citylimit: cityLimit && city ? 'true' : undefined,
-  }, amapKey)
-
-  /** @type {any[]} */
-  const pois = poiJson?.pois || []
-  const candidates = buildPoiCandidates({ text, pois })
-  if (candidates.length) return candidates
-
-  const geoJson = await amapGetJson('geocode/geo', {
-    address: text,
-    city: city || undefined,
-  }, amapKey)
-  /** @type {any[]} */
-  const geocodes = geoJson?.geocodes || []
-  const geoCandidates = []
-  for (const geo of geocodes.slice(0, capped)) {
-    if (!geo?.location) continue
-    const location = parseLocation(geo.location)
-    if (!location) continue
-    geoCandidates.push({
-      input: text,
-      name: geo.formatted_address || text,
-      address: geo.formatted_address || null,
-      location,
-      citycode: geo?.citycode || null,
-      adcode: geo?.adcode || null,
-      source: 'geocode',
-    })
-  }
-  return geoCandidates
-}
-
 export async function getDrivingSummary({ origin, destination, amapKey }) {
-  const json = await amapGetJson('direction/driving', {
-    origin: lngLatToText(origin),
-    destination: lngLatToText(destination),
-    extensions: 'all',
-    strategy: 0,
-  }, amapKey)
+  const json = await amapGetJson(
+    'direction/driving',
+    {
+      origin: lngLatToText(origin),
+      destination: lngLatToText(destination),
+      extensions: 'all',
+      strategy: 0,
+    },
+    amapKey,
+  )
 
   const route = json?.route
   const firstPath = route?.paths?.[0]
@@ -295,10 +37,14 @@ export async function getDrivingSummary({ origin, destination, amapKey }) {
 }
 
 export async function getWalkingSummary({ origin, destination, amapKey }) {
-  const json = await amapGetJson('direction/walking', {
-    origin: lngLatToText(origin),
-    destination: lngLatToText(destination),
-  }, amapKey)
+  const json = await amapGetJson(
+    'direction/walking',
+    {
+      origin: lngLatToText(origin),
+      destination: lngLatToText(destination),
+    },
+    amapKey,
+  )
 
   const route = json?.route
   const firstPath = route?.paths?.[0]
@@ -319,7 +65,7 @@ export async function getCyclingSummary({ origin, destination, amapKey }) {
     },
     amapKey,
     {
-      base: AMAP_API_BASE_V4,
+      base: amapBases.v4,
       isOk: (data) => data?.status === '1' || Number(data?.errcode ?? 0) === 0,
       getErrorInfo: (data) => ({
         info: String(data?.errmsg || data?.info || 'UNKNOWN'),
@@ -399,14 +145,18 @@ function estimateDurationSeconds(distanceMeters, speedMps) {
 }
 
 export async function getTransitSummary({ origin, destination, city, cityd, strategy, maxPlans, amapKey }) {
-  const json = await amapGetJson('direction/transit/integrated', {
-    origin: lngLatToText(origin),
-    destination: lngLatToText(destination),
-    city: city || '',
-    cityd: cityd || '',
-    extensions: 'base',
-    strategy: strategy ?? 0,
-  }, amapKey)
+  const json = await amapGetJson(
+    'direction/transit/integrated',
+    {
+      origin: lngLatToText(origin),
+      destination: lngLatToText(destination),
+      city: city || '',
+      cityd: cityd || '',
+      extensions: 'base',
+      strategy: strategy ?? 0,
+    },
+    amapKey,
+  )
 
   /** @type {any[]} */
   const transits = json?.route?.transits || []
@@ -444,12 +194,16 @@ function polylineTextToPath(polylineText) {
 }
 
 export async function getDrivingRoutePolylines({ origin, destination, amapKey }) {
-  const json = await amapGetJson('direction/driving', {
-    origin: lngLatToText(origin),
-    destination: lngLatToText(destination),
-    extensions: 'all',
-    strategy: 0,
-  }, amapKey)
+  const json = await amapGetJson(
+    'direction/driving',
+    {
+      origin: lngLatToText(origin),
+      destination: lngLatToText(destination),
+      extensions: 'all',
+      strategy: 0,
+    },
+    amapKey,
+  )
 
   const route = json?.route
   const firstPath = route?.paths?.[0]
@@ -476,10 +230,14 @@ export async function getDrivingRoutePolylines({ origin, destination, amapKey })
 }
 
 export async function getWalkingRoutePolylines({ origin, destination, amapKey }) {
-  const json = await amapGetJson('direction/walking', {
-    origin: lngLatToText(origin),
-    destination: lngLatToText(destination),
-  }, amapKey)
+  const json = await amapGetJson(
+    'direction/walking',
+    {
+      origin: lngLatToText(origin),
+      destination: lngLatToText(destination),
+    },
+    amapKey,
+  )
 
   const route = json?.route
   const firstPath = route?.paths?.[0]
@@ -514,7 +272,7 @@ export async function getCyclingRoutePolylines({ origin, destination, amapKey })
     },
     amapKey,
     {
-      base: AMAP_API_BASE_V4,
+      base: amapBases.v4,
       isOk: (data) => data?.status === '1' || Number(data?.errcode ?? 0) === 0,
       getErrorInfo: (data) => ({
         info: String(data?.errmsg || data?.info || 'UNKNOWN'),
@@ -548,14 +306,18 @@ export async function getCyclingRoutePolylines({ origin, destination, amapKey })
 }
 
 export async function getTransitRoutePolylines({ origin, destination, city, cityd, strategy, planIndex, amapKey }) {
-  const json = await amapGetJson('direction/transit/integrated', {
-    origin: lngLatToText(origin),
-    destination: lngLatToText(destination),
-    city: city || '',
-    cityd: cityd || '',
-    extensions: 'base',
-    strategy: strategy ?? 0,
-  }, amapKey)
+  const json = await amapGetJson(
+    'direction/transit/integrated',
+    {
+      origin: lngLatToText(origin),
+      destination: lngLatToText(destination),
+      city: city || '',
+      cityd: cityd || '',
+      extensions: 'base',
+      strategy: strategy ?? 0,
+    },
+    amapKey,
+  )
 
   /** @type {any[]} */
   const transits = json?.route?.transits || []
@@ -583,8 +345,7 @@ export async function getTransitRoutePolylines({ origin, destination, city, city
         const fromLoc = walking?.origin ? parseLocation(walking.origin) : null
         const toLoc = walking?.destination ? parseLocation(walking.destination) : null
         const walkDistance = parseNumber(walking?.distance)
-        const walkDuration =
-          pickDurationSeconds(walking?.duration) ?? estimateDurationSeconds(walkDistance, speed.walking)
+        const walkDuration = pickDurationSeconds(walking?.duration) ?? estimateDurationSeconds(walkDistance, speed.walking)
         routeSegments.push({
           kind: 'walking',
           label: '步行',
@@ -601,8 +362,7 @@ export async function getTransitRoutePolylines({ origin, destination, city, city
       const taxiPath = polylineTextToPath(taxi.polyline)
       if (taxiPath.length) {
         const taxiDistance = parseNumber(taxi?.distance)
-        const taxiDuration =
-          pickDurationSeconds(taxi?.duration) ?? estimateDurationSeconds(taxiDistance, speed.taxi)
+        const taxiDuration = pickDurationSeconds(taxi?.duration) ?? estimateDurationSeconds(taxiDistance, speed.taxi)
         routeSegments.push({
           kind: 'taxi',
           label: '打车',
@@ -625,9 +385,7 @@ export async function getTransitRoutePolylines({ origin, destination, city, city
       const fromLoc = fromStop?.location ? parseLocation(fromStop.location) : null
       const toLoc = toStop?.location ? parseLocation(toStop.location) : null
       const lineDistance = parseNumber(line?.distance)
-      const lineDuration =
-        pickDurationSeconds(line?.duration) ??
-        estimateDurationSeconds(lineDistance, kind === 'subway' ? speed.subway : speed.bus)
+      const lineDuration = pickDurationSeconds(line?.duration) ?? estimateDurationSeconds(lineDistance, kind === 'subway' ? speed.subway : speed.bus)
       routeSegments.push({
         kind,
         label: short,
@@ -643,9 +401,7 @@ export async function getTransitRoutePolylines({ origin, destination, city, city
       const railwayPath = polylineTextToPath(railway.polyline)
       if (railwayPath.length) {
         const railDistance = parseNumber(railway?.distance) ?? parseNumber(railway?.trip?.distance)
-        const railDuration =
-          pickDurationSeconds(railway?.duration, railway?.trip?.duration) ??
-          estimateDurationSeconds(railDistance, speed.railway)
+        const railDuration = pickDurationSeconds(railway?.duration, railway?.trip?.duration) ?? estimateDurationSeconds(railDistance, speed.railway)
         routeSegments.push({
           kind: 'railway',
           label: String(railway?.name || '铁路'),
