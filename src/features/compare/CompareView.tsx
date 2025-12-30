@@ -56,6 +56,8 @@ export function CompareView({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsDraft, setSettingsDraft] = useState<SettingsDraft>({
     amapKey: initialSettings.amapKey,
+    amapWebKey: initialSettings.amapWebKey,
+    amapSecurityCode: initialSettings.amapSecurityCode,
     candidateLimit: String(initialSettings.candidateLimit),
   })
   const mapRef = useRef<MapViewHandle | null>(null)
@@ -82,17 +84,32 @@ export function CompareView({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
   }, [data])
 
   const amapKeyOverride = settings.amapKey.trim()
+  const amapWebKeyOverride = settings.amapWebKey.trim()
+  const amapSecurityCodeOverride = settings.amapSecurityCode.trim()
   const runtimeAmapKey = amapKeyOverride ? amapKeyOverride : undefined
+  const runtimeAmapWebKey = amapWebKeyOverride ? amapWebKeyOverride : undefined
+  const runtimeAmapSecurityCode = amapSecurityCodeOverride ? amapSecurityCodeOverride : undefined
+  const runtimeAmapRequestKey = runtimeAmapWebKey || runtimeAmapKey
   const candidateLimit = clampCandidateLimit(settings.candidateLimit)
 
   const openSettingsPanel = () => {
-    setSettingsDraft({ amapKey: settings.amapKey, candidateLimit: String(settings.candidateLimit) })
+    setSettingsDraft({
+      amapKey: settings.amapKey,
+      amapWebKey: settings.amapWebKey,
+      amapSecurityCode: settings.amapSecurityCode,
+      candidateLimit: String(settings.candidateLimit),
+    })
     setSettingsOpen(true)
   }
 
   const closeSettingsPanel = () => {
     setSettingsOpen(false)
-    setSettingsDraft({ amapKey: settings.amapKey, candidateLimit: String(settings.candidateLimit) })
+    setSettingsDraft({
+      amapKey: settings.amapKey,
+      amapWebKey: settings.amapWebKey,
+      amapSecurityCode: settings.amapSecurityCode,
+      candidateLimit: String(settings.candidateLimit),
+    })
   }
 
   const saveSettingsPanel = () => {
@@ -117,6 +134,8 @@ export function CompareView({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
     setSettings({ ...DEFAULT_SETTINGS })
     setSettingsDraft({
       amapKey: DEFAULT_SETTINGS.amapKey,
+      amapWebKey: DEFAULT_SETTINGS.amapWebKey,
+      amapSecurityCode: DEFAULT_SETTINGS.amapSecurityCode,
       candidateLimit: String(DEFAULT_SETTINGS.candidateLimit),
     })
   }
@@ -152,7 +171,7 @@ export function CompareView({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
         city: city.trim() || undefined,
         cityLimit,
         limit: candidateLimit,
-        amapKey: runtimeAmapKey,
+        amapKey: runtimeAmapRequestKey,
       })
       if (candidateRequestRef.current !== key) return
       const list = Array.isArray(resp.candidates) ? resp.candidates : []
@@ -184,7 +203,7 @@ export function CompareView({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
         reversePlaces,
         onlyPlaceIdx: kind === 'place' ? idx : null,
         onlyHotelIdx: kind === 'hotel' ? idx : null,
-        amapKey: runtimeAmapKey,
+        amapKey: runtimeAmapRequestKey,
       })
 
       const nextData = {
@@ -265,7 +284,7 @@ export function CompareView({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
         hotels,
         places,
         reversePlaces: nextReversePlaces,
-        amapKey: runtimeAmapKey,
+        amapKey: runtimeAmapRequestKey,
       })
       setData(resp)
       setExpandedPlaces(Array.from({ length: resp.places.length }, () => false))
@@ -305,7 +324,7 @@ export function CompareView({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
         places: data.places,
         reversePlaces: nextReversePlaces,
         onlyPlaceIdx: placeIdx,
-        amapKey: runtimeAmapKey,
+        amapKey: runtimeAmapRequestKey,
       })
 
       const merged = mergeComparisons(data.comparisons, resp.comparisons)
@@ -336,7 +355,7 @@ export function CompareView({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
         city: city.trim() || originPlace.citycode || undefined,
         cityd: city.trim() || destPlace.citycode || undefined,
         planIndex: params.planIndex,
-        amapKey: runtimeAmapKey,
+        amapKey: runtimeAmapRequestKey,
       })
       mapRef.current?.showRoute({ polylines: resp.polylines, segments: resp.segments })
       setActiveRoute({
@@ -1031,6 +1050,7 @@ export function CompareView({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
         <MapView
           ref={mapRef}
           amapKey={runtimeAmapKey}
+          securityJsCode={runtimeAmapSecurityCode}
           onSelectHotel={handleHotelMarkerSelect}
           onSelectPlace={handlePlaceMarkerSelect}
           onSelectCandidate={handleCandidateMarkerSelect}
@@ -1056,20 +1076,41 @@ export function CompareView({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
           >
             <div className="tm-modal__head">设置</div>
             <div className="tm-modal__body">
-              <div className="tm-field">
-                <label className="tm-label">高德 API Key（可留空）</label>
-                <div className="tm-field__row">
+              <div className="tm-section tm-section--tight">
+                <div className="tm-section__title">API 配置（可留空）</div>
+                <div className="tm-field">
+                  <label className="tm-label">VITE_AMAP_KEY</label>
                   <input
                     className="tm-input"
                     value={settingsDraft.amapKey}
                     onChange={(e) => setSettingsDraft((prev) => ({ ...prev, amapKey: e.target.value }))}
-                    placeholder="留空则使用 .env 中的 VITE_AMAP_KEY / AMAP_WEB_KEY"
+                    placeholder="留空则使用 .env 中的 VITE_AMAP_KEY"
                   />
-                  <button className="tm-btn tm-btn--small tm-btn--primary" type="button" onClick={saveSettingsLocal}>
-                    保存到本地
-                  </button>
                 </div>
-                <div className="tm-field__hint">点“保存到本地”才会写入浏览器缓存。</div>
+                <div className="tm-field">
+                  <label className="tm-label">AMAP_WEB_KEY</label>
+                  <input
+                    className="tm-input"
+                    value={settingsDraft.amapWebKey}
+                    onChange={(e) => setSettingsDraft((prev) => ({ ...prev, amapWebKey: e.target.value }))}
+                    placeholder="留空则使用 .env 中的 AMAP_WEB_KEY"
+                  />
+                </div>
+                <div className="tm-field">
+                  <label className="tm-label">VITE_AMAP_SECURITY_CODE</label>
+                  <div className="tm-field__row">
+                    <input
+                      className="tm-input"
+                      value={settingsDraft.amapSecurityCode}
+                      onChange={(e) => setSettingsDraft((prev) => ({ ...prev, amapSecurityCode: e.target.value }))}
+                      placeholder="JSAPI 安全密钥（可选）"
+                    />
+                    <button className="tm-btn tm-btn--small tm-btn--primary" type="button" onClick={saveSettingsLocal}>
+                      保存到本地
+                    </button>
+                  </div>
+                  <div className="tm-field__hint">点“保存到本地”才会写入浏览器缓存。</div>
+                </div>
               </div>
               <div className="tm-field">
                 <label className="tm-label">匹配有误：最多显示候选数</label>

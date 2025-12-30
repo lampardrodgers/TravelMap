@@ -6,7 +6,7 @@ export function toErrorMessage(err: unknown) {
 }
 
 export const SETTINGS_STORAGE_KEY = 'travelmap-settings-v1'
-export const DEFAULT_SETTINGS: Settings = { amapKey: '', candidateLimit: 8 }
+export const DEFAULT_SETTINGS: Settings = { amapKey: '', amapWebKey: '', amapSecurityCode: '', candidateLimit: 8 }
 
 export const clampCandidateLimit = (value: number) => {
   if (!Number.isFinite(value)) return DEFAULT_SETTINGS.candidateLimit
@@ -21,6 +21,9 @@ export const loadSettings = (): Settings => {
     const parsed = JSON.parse(raw) as Partial<Settings>
     return {
       amapKey: typeof parsed.amapKey === 'string' ? parsed.amapKey : DEFAULT_SETTINGS.amapKey,
+      amapWebKey: typeof parsed.amapWebKey === 'string' ? parsed.amapWebKey : DEFAULT_SETTINGS.amapWebKey,
+      amapSecurityCode:
+        typeof parsed.amapSecurityCode === 'string' ? parsed.amapSecurityCode : DEFAULT_SETTINGS.amapSecurityCode,
       candidateLimit: clampCandidateLimit(Number(parsed.candidateLimit ?? DEFAULT_SETTINGS.candidateLimit)),
     }
   } catch {
@@ -40,6 +43,8 @@ export const normalizeSettings = (draft: SettingsDraft, fallback: Settings): Set
   const nextLimit = Number.parseInt(draft.candidateLimit, 10)
   return {
     amapKey: draft.amapKey.trim(),
+    amapWebKey: draft.amapWebKey.trim(),
+    amapSecurityCode: draft.amapSecurityCode.trim(),
     candidateLimit: Number.isFinite(nextLimit) ? clampCandidateLimit(nextLimit) : fallback.candidateLimit,
   }
 }

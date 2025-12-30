@@ -92,13 +92,17 @@ export const MapView = forwardRef<
   MapViewHandle,
   {
     amapKey?: string
+    securityJsCode?: string
     onSelectHotel?: (index: number) => void
     onSelectPlace?: (index: number) => void
     onSelectCandidate?: (index: number) => void
     onHoverHotel?: (index: number | null) => void
     onHoverPlace?: (index: number | null) => void
   }
->(function MapView({ amapKey: amapKeyOverride, onSelectHotel, onSelectPlace, onSelectCandidate, onHoverHotel, onHoverPlace }, ref) {
+>(function MapView(
+  { amapKey: amapKeyOverride, securityJsCode: securityJsCodeOverride, onSelectHotel, onSelectPlace, onSelectCandidate, onHoverHotel, onHoverPlace },
+  ref,
+) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<AMapMap | null>(null)
   const amapRef = useRef<AMapNamespace | null>(null)
@@ -137,7 +141,8 @@ export const MapView = forwardRef<
   const onHoverPlaceRef = useRef<typeof onHoverPlace>(onHoverPlace)
   const envAmapKey = import.meta.env.VITE_AMAP_KEY as string | undefined
   const amapKey = amapKeyOverride || envAmapKey
-  const securityJsCode = import.meta.env.VITE_AMAP_SECURITY_CODE as string | undefined
+  const envSecurityJsCode = import.meta.env.VITE_AMAP_SECURITY_CODE as string | undefined
+  const securityJsCode = securityJsCodeOverride || envSecurityJsCode
   const [loadError, setLoadError] = useState<string | null>(null)
   const keyError = !amapKey ? '缺少高德 Key，无法加载地图' : null
   const displayError = keyError ?? loadError
@@ -400,7 +405,7 @@ export const MapView = forwardRef<
       else if (hh >= 2 && hh < 3) [r, g, b] = [0, c, x]
       else if (hh >= 3 && hh < 4) [r, g, b] = [0, x, c]
       else if (hh >= 4 && hh < 5) [r, g, b] = [x, 0, c]
-      else [r, g, b] = [c, 0, x]
+      else[r, g, b] = [c, 0, x]
       const m = light - c / 2
       const toHex = (v: number) => {
         const n = Math.round((v + m) * 255)
@@ -550,13 +555,13 @@ export const MapView = forwardRef<
             ? '步行'
             : seg.kind === 'cycling'
               ? '骑车'
-            : seg.kind === 'taxi'
-              ? '打车'
-              : seg.kind === 'subway'
-                ? '地铁'
-                : seg.kind === 'bus'
-                  ? '公交'
-                  : '路线')
+              : seg.kind === 'taxi'
+                ? '打车'
+                : seg.kind === 'subway'
+                  ? '地铁'
+                  : seg.kind === 'bus'
+                    ? '公交'
+                    : '路线')
 
       const mid = getMidpoint(seg.path)
       if (mid) {

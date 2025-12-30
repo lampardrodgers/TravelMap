@@ -14,6 +14,10 @@ VITE_AMAP_KEY=你的高德Key
 AMAP_WEB_KEY=你的高德Key
 # 可选：如果你的 Key 开启了「JSAPI 安全密钥」
 # VITE_AMAP_SECURITY_CODE=你的securityJsCode
+# 可选：前端访问密码（取消注释后生效）
+# functionlock=你的访问密码
+# 可选：密码有效时间（小时，允许小数）。仅在 functionlock 启用时生效；0/留空/注释代表每次都要输入
+functionlock_hours=12
 PORT=5174
 ```
 
