@@ -557,7 +557,7 @@ export function CompareView({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
                 <span className="tm-label__icon tm-label__icon--hotel">
                   <PinIcon />
                 </span>
-                酒店（每行 1 个，可多行）
+                选择地（每行 1 个）
               </label>
               <textarea
                 className="tm-textarea"
@@ -571,7 +571,7 @@ export function CompareView({ modeSwitcher }: { modeSwitcher?: ReactNode }) {
                 <span className="tm-label__icon tm-label__icon--place">
                   <PinIcon />
                 </span>
-                地点（交通枢纽/公司/景点等，每行 1 个）
+                前往点（每行 1 个）
               </label>
               <textarea
                 className="tm-textarea"

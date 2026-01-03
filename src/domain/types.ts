@@ -1,4 +1,5 @@
 export type LngLat = { lng: number; lat: number }
+export type TrafficStatus = 'smooth' | 'slow' | 'jam' | 'serious'
 
 export type ResolvedPlace = {
   input: string
@@ -76,6 +77,7 @@ export type RouteResponse = {
     label: string
     path: Array<[number, number]>
     durationSeconds?: number
+    trafficStatus?: TrafficStatus
     from?: { name: string | null; location: LngLat | null }
     to?: { name: string | null; location: LngLat | null }
   }>

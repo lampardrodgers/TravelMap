@@ -1,6 +1,6 @@
 import AMapLoader from '@amap/amap-jsapi-loader'
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import type { LngLat, ResolvedPlace, RoutePolyline } from '../domain/types'
+import type { LngLat, ResolvedPlace, RoutePolyline, TrafficStatus } from '../domain/types'
 
 export type MapViewHandle = {
   setPoints: (params: { hotels: ResolvedPlace[]; places: ResolvedPlace[]; selectedHotelIdx: number | null }) => void
@@ -19,6 +19,7 @@ export type RouteSegment = {
   label?: string
   path: Array<[number, number]>
   durationSeconds?: number
+  trafficStatus?: TrafficStatus
   from?: { name: string | null; location: LngLat | null }
   to?: { name: string | null; location: LngLat | null }
 }
@@ -427,9 +428,22 @@ export const MapView = forwardRef<
       return color
     }
 
-    const getColor = (kind: RoutePolyline['kind'], label: string | undefined, avoidTransitColor: string | null) => {
-      if (kind === 'driving') return '#2563eb'
-      if (kind === 'taxi') return '#dc2626'
+    const trafficColors: Record<TrafficStatus, string> = {
+      smooth: '#22c55e',
+      slow: '#f59e0b',
+      jam: '#ef4444',
+      serious: '#b91c1c',
+    }
+
+    const pickTrafficColor = (status?: TrafficStatus) => trafficColors[status ?? 'smooth']
+
+    const getColor = (
+      kind: RoutePolyline['kind'],
+      label: string | undefined,
+      avoidTransitColor: string | null,
+      trafficStatus?: TrafficStatus,
+    ) => {
+      if (kind === 'driving' || kind === 'taxi') return pickTrafficColor(trafficStatus)
       if (kind === 'walking') return '#64748b'
       if (kind === 'cycling') return '#0ea5e9'
       const lineKey = normalizeLineLabel(label) || kind
@@ -516,11 +530,19 @@ export const MapView = forwardRef<
       if (handler) handler()
     }
 
-    const allowSegmentFocus = Boolean(segments?.length)
+    const allowSegmentFocus = Boolean(segments?.length) && items.some((seg) => seg.kind !== 'driving' && seg.kind !== 'taxi')
+
+    const drivingLabelIndex = (() => {
+      const indices = items
+        .map((seg, idx) => ((seg.kind === 'driving' || seg.kind === 'taxi') && seg.trafficStatus ? idx : null))
+        .filter((idx): idx is number => idx !== null)
+      if (!indices.length) return null
+      return indices[Math.floor(indices.length / 2)] ?? null
+    })()
 
     let lastTransitColor: string | null = null
     items.forEach((seg, segIndex) => {
-      const color = getColor(seg.kind, seg.label, lastTransitColor)
+      const color = getColor(seg.kind, seg.label, lastTransitColor, seg.trafficStatus)
       const style = (() => {
         switch (seg.kind) {
           case 'driving':
@@ -564,7 +586,9 @@ export const MapView = forwardRef<
                     : '路线')
 
       const mid = getMidpoint(seg.path)
-      if (mid) {
+      const shouldShowLabel =
+        !(seg.kind === 'driving' || seg.kind === 'taxi') || !seg.trafficStatus || drivingLabelIndex === segIndex
+      if (mid && shouldShowLabel) {
         const marker = new AMap.Marker({
           position: mid,
           content: buildRouteLabelHtml(labelText, color),

@@ -11,6 +11,16 @@ function getBicyclingPaths(json) {
   return rawPaths
 }
 
+function normalizeTrafficStatus(status) {
+  const value = String(status || '').trim()
+  if (!value) return 'smooth'
+  if (value.includes('严重')) return 'serious'
+  if (value.includes('拥堵')) return 'jam'
+  if (value.includes('缓行')) return 'slow'
+  if (value.includes('畅通')) return 'smooth'
+  return 'smooth'
+}
+
 export async function getDrivingSummary({ origin, destination, amapKey }) {
   const json = await amapGetJson(
     'direction/driving',
@@ -209,23 +219,50 @@ export async function getDrivingRoutePolylines({ origin, destination, amapKey })
   const firstPath = route?.paths?.[0]
   const durationSeconds = parseNumber(firstPath?.duration)
   const steps = Array.isArray(firstPath?.steps) ? firstPath.steps : []
-  const paths = steps.flatMap((s) => polylineTextToPath(s?.polyline))
+  const routeSegments = []
+  for (const step of steps) {
+    const tmcs = Array.isArray(step?.tmcs) ? step.tmcs : []
+    if (tmcs.length) {
+      for (const tmc of tmcs) {
+        const tmcPath = polylineTextToPath(tmc?.polyline)
+        if (!tmcPath.length) continue
+        routeSegments.push({
+          kind: 'driving',
+          label: '打车',
+          path: tmcPath,
+          trafficStatus: normalizeTrafficStatus(tmc?.status),
+        })
+      }
+      continue
+    }
+    const stepPath = polylineTextToPath(step?.polyline)
+    if (!stepPath.length) continue
+    routeSegments.push({
+      kind: 'driving',
+      label: '打车',
+      path: stepPath,
+      trafficStatus: 'smooth',
+    })
+  }
+
+  const fallbackPaths = steps.flatMap((s) => polylineTextToPath(s?.polyline))
+  if (routeSegments.length === 0 && fallbackPaths.length) {
+    routeSegments.push({
+      kind: 'driving',
+      label: '打车',
+      path: fallbackPaths,
+      trafficStatus: 'smooth',
+    })
+  }
+
+  if (routeSegments.length && durationSeconds !== null) {
+    routeSegments[0].durationSeconds = durationSeconds ?? undefined
+  }
+
   return {
     taxiCostYuan: parseNumber(route?.taxi_cost),
-    segments: [
-      {
-        kind: 'driving',
-        label: '打车',
-        path: paths,
-        durationSeconds: durationSeconds ?? undefined,
-      },
-    ],
-    polylines: [
-      {
-        kind: 'driving',
-        path: paths,
-      },
-    ],
+    segments: routeSegments,
+    polylines: routeSegments.map((seg) => ({ kind: seg.kind, path: seg.path, label: seg.label })),
   }
 }
 
