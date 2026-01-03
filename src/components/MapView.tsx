@@ -586,9 +586,9 @@ export const MapView = forwardRef<
                     : '路线')
 
       const mid = getMidpoint(seg.path)
-      const shouldShowLabel =
+      const shouldShowSegmentLabel =
         !(seg.kind === 'driving' || seg.kind === 'taxi') || !seg.trafficStatus || drivingLabelIndex === segIndex
-      if (mid && shouldShowLabel) {
+      if (mid && shouldShowSegmentLabel) {
         const marker = new AMap.Marker({
           position: mid,
           content: buildRouteLabelHtml(labelText, color),
